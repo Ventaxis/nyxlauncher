@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NyxLauncher</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="logo">
+      <span class="logo-moon">🌙</span>
+      <span class="logo-text">Nyx<span class="logo-accent">Launcher</span></span>
+    </div>
+    <button id="btn-add" class="btn btn-primary">+ Добавить игру</button>
+  </header>
+
+  <main class="layout">
+    <aside class="sidebar">
+      <div class="sidebar-title">Библиотека</div>
+      <ul id="game-list" class="game-list"></ul>
+    </aside>
+
+    <section class="content" id="content">
+      <div class="empty-state" id="empty-state">
+        <div class="empty-moon">🐈‍⬛</div>
+        <h2>Библиотека пуста</h2>
+        <p>Добавь первый .exe — и Nyx начнёт считать твои игровые часы, мяу~</p>
+      </div>
+
+      <div class="game-detail" id="game-detail" hidden>
+        <div class="cover" id="cover">
+          <div class="cover-icon">🎮</div>
+        </div>
+        <div class="detail-info">
+          <h1 id="game-name">—</h1>
+          <div class="stats-row">
+            <div class="stat">
+              <div class="stat-value" id="stat-hours">0 ч</div>
+              <div class="stat-label">наиграно</div>
+            </div>
+            <div class="stat">
+              <div class="stat-value" id="stat-last">—</div>
+              <div class="stat-label">последний запуск</div>
+            </div>
+          </div>
+          <div class="detail-actions">
+            <button id="btn-play" class="btn btn-primary btn-big">▶ Играть</button>
+            <button id="btn-remove" class="btn btn-danger">Убрать из библиотеки</button>
+          </div>
+          <div class="achievements">
+            <div class="achievements-title">Достижения</div>
+            <div class="achievements-placeholder">🐾 Появятся в версии 0.2 — Nyx уже точит коготки</div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="statusbar">
+    <span id="status-text">🐾 NyxLauncher MVP — Ventaxis Corp</span>
+  </footer>
+
+  <script src="main.js"></script>
+</body>
+</html>
