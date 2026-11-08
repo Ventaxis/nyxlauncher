@@ -1,6 +1,6 @@
 // Персистентность NyxLauncher: атомарная запись JSON + загрузка с деградацией до дефолта.
 
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
 

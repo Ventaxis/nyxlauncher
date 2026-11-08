@@ -120,10 +120,8 @@ fn week_from(per_day: &BTreeMap<String, u64>) -> Vec<WeekDay> {
         .map(|i| {
             let d = today - chrono::Duration::days(i);
             let key = d.format("%Y-%m-%d").to_string();
-            WeekDay {
-                date: key,
-                seconds: per_day.get(&key).copied().unwrap_or(0),
-            }
+            let seconds = per_day.get(&key).copied().unwrap_or(0);
+            WeekDay { date: key, seconds }
         })
         .collect()
 }
@@ -138,12 +136,13 @@ fn achievement_views(state: &AppState, sessions: &[Session]) -> Vec<AchievementV
         .into_iter()
         .map(|o| {
             let def = state.defs.iter().find(|d| d.id == o.id);
+            let unlocked_now = o.unlocked || unlocked.contains_key(&o.id);
             AchievementView {
-                id: o.id,
+                id: o.id.clone(),
                 title: def.map(|d| d.title.clone()).unwrap_or_default(),
                 description: def.map(|d| d.description.clone()).unwrap_or_default(),
                 icon: def.map(|d| d.icon.clone()).unwrap_or_default(),
-                unlocked: o.unlocked || unlocked.contains_key(&o.id.clone()),
+                unlocked: unlocked_now,
                 unlocked_at: unlocked.get(&o.id).cloned(),
                 progress: o.progress,
             }

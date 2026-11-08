@@ -1,7 +1,7 @@
 // Движок статистики и ачивок NyxLauncher — чистые функции, без tauri.
 // Тестируется отдельно от приложения (cargo test).
 
-use chrono::{Datelike, NaiveDate, TimeZone, Timelike, Utc};
+use chrono::{NaiveDate, TimeZone, Timelike, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
 
@@ -196,6 +196,7 @@ fn measure(cond: &Condition, stats: &Stats, ctx: &EvalContext) -> (bool, f64, f6
             *days as f64,
         ),
         Condition::SessionStartHour { from, to } => {
+            let (from, to) = (*from, *to);
             let hit = if from < to {
                 (from..to).any(|h| stats.start_hour_counts[h as usize] > 0)
             } else {
