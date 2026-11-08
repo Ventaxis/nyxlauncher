@@ -1,7 +1,7 @@
 mod engine;
 mod store;
 
-use chrono::Utc;
+use chrono::Local;
 use engine::{AchievementDef, EvalContext, Session};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, RunEvent, State};
 
 const TICK_SECS: u64 = 5;
 const ACHIEVEMENTS_JSON: &str = include_str!("../achievements.json");
@@ -86,35 +86,55 @@ struct ActiveSession {
     end: i64,
 }
 
+impl ActiveSession {
+    fn seconds(&self) -> u64 {
+        (self.end - self.start).max(0) as u64
+    }
+}
+
+impl From<&ActiveSession> for Session {
+    fn from(a: &ActiveSession) -> Self {
+        Session {
+            game_id: a.game_id.clone(),
+            start: a.start,
+            end: a.end,
+        }
+    }
+}
+
+/// Глобальное состояние. ПРАВИЛО БЛОКИРОВОК: если нужно несколько мьютексов,
+/// захватывать строго в порядке games → sessions → active → unlocked,
+/// и никогда не захватывать уже удерживаемый повторно (std Mutex не реентерабелен).
+/// ЗАПИСЬ НА ДИСК — только после drop всех guard'ов: файл может писать десятки мс.
 struct AppState {
     games: Mutex<Vec<Game>>,
     sessions: Mutex<Vec<Session>>,
-    active: Mutex<HashMap<String, ActiveSession>>, // game_id -> сессия
-    unlocked: Mutex<HashMap<String, String>>,      // achievement id -> when
+    active: Mutex<HashMap<String, ActiveSession>>,
+    unlocked: Mutex<HashMap<String, String>>,
     defs: Vec<AchievementDef>,
     data_dir: PathBuf,
 }
 
 fn now_ts() -> i64 {
-    Utc::now().timestamp()
+    Local::now().timestamp()
 }
 
 fn now_rfc3339() -> String {
-    Utc::now().to_rfc3339()
+    Local::now().to_rfc3339()
 }
 
-fn game_stats_from(sessions: &[Session], game_id: &str) -> engine::Stats {
-    let mine: Vec<Session> = sessions
-        .iter()
-        .filter(|s| s.game_id == game_id)
-        .cloned()
-        .collect();
-    engine::compute(&mine)
+/// Полный снимок сессий: закрытые + активные (активные как обычные строки).
+fn all_sessions_snapshot(sessions: &[Session], active: &HashMap<String, ActiveSession>) -> Vec<Session> {
+    let mut all = sessions.to_vec();
+    for a in active.values() {
+        all.push(Session::from(a));
+    }
+    all
 }
 
-/// Последние 7 дней (UTC) от старого к сегодняшнему, с секундами из per_day.
+/// Последние 7 дней (локальное время) от старого к сегодняшнему.
 fn week_from(per_day: &BTreeMap<String, u64>) -> Vec<WeekDay> {
-    let today = Utc::now().date_naive();
+    let today = Local::now().date_naive();
     (0..7)
         .rev()
         .map(|i| {
@@ -126,24 +146,26 @@ fn week_from(per_day: &BTreeMap<String, u64>) -> Vec<WeekDay> {
         .collect()
 }
 
-fn achievement_views(state: &AppState, sessions: &[Session]) -> Vec<AchievementView> {
+/// Витрина ачивок: чистая функция от данных, без доступа к AppState.
+fn achievement_views(
+    defs: &[AchievementDef],
+    sessions: &[Session],
+    game_count: u32,
+    unlocked_map: &HashMap<String, String>,
+) -> Vec<AchievementView> {
     let stats = engine::compute(sessions);
-    let ctx = EvalContext {
-        game_count: state.games.lock().unwrap().len() as u32,
-    };
-    let unlocked = state.unlocked.lock().unwrap();
-    engine::evaluate(&state.defs, &stats, &ctx)
+    let ctx = EvalContext { game_count };
+    engine::evaluate(defs, &stats, &ctx)
         .into_iter()
         .map(|o| {
-            let def = state.defs.iter().find(|d| d.id == o.id);
-            let unlocked_now = o.unlocked || unlocked.contains_key(&o.id);
+            let def = defs.iter().find(|d| d.id == o.id);
             AchievementView {
                 id: o.id.clone(),
                 title: def.map(|d| d.title.clone()).unwrap_or_default(),
                 description: def.map(|d| d.description.clone()).unwrap_or_default(),
                 icon: def.map(|d| d.icon.clone()).unwrap_or_default(),
-                unlocked: unlocked_now,
-                unlocked_at: unlocked.get(&o.id).cloned(),
+                unlocked: o.unlocked || unlocked_map.contains_key(&o.id),
+                unlocked_at: unlocked_map.get(&o.id).cloned(),
                 progress: o.progress,
             }
         })
@@ -152,34 +174,44 @@ fn achievement_views(state: &AppState, sessions: &[Session]) -> Vec<AchievementV
 
 #[tauri::command]
 fn get_summary(state: State<AppState>) -> Summary {
-    let games = state.games.lock().unwrap();
-    let sessions = state.sessions.lock().unwrap();
-    let active = state.active.lock().unwrap();
+    // порядок: games → sessions → active → unlocked; снимки под lock, работа после drop
+    let (games_snapshot, all_sessions, active_snapshot, game_count, unlocked_map) = {
+        let games = state.games.lock().unwrap();
+        let sessions = state.sessions.lock().unwrap();
+        let active = state.active.lock().unwrap();
+        let unlocked_map = state.unlocked.lock().unwrap().clone();
+        let active_snapshot: HashMap<String, (i64, i64)> = active
+            .iter()
+            .map(|(k, a)| (k.clone(), (a.start, a.end)))
+            .collect();
+        (
+            games.clone(),
+            all_sessions_snapshot(&sessions, &active),
+            active_snapshot,
+            games.len() as u32,
+            unlocked_map,
+        )
+    };
 
-    let game_views: Vec<GameView> = games
+    let game_views: Vec<GameView> = games_snapshot
         .iter()
         .map(|g| {
-            // витрина: закрытые часы + текущая незакрытая сессия
-            let live = active.get(&g.id).map(|a| (a.end - a.start).max(0) as u64).unwrap_or(0);
+            // live — только текущая незакрытая сессия этой игры
+            let live = active_snapshot
+                .get(&g.id)
+                .map(|(start, end)| (*end - *start).max(0) as u64)
+                .unwrap_or(0);
             GameView {
                 id: g.id.clone(),
                 name: g.name.clone(),
                 exe_path: g.exe_path.clone(),
                 seconds_played: g.seconds_played + live,
                 last_played: g.last_played.clone(),
-                playing: active.contains_key(&g.id),
+                playing: active_snapshot.contains_key(&g.id),
             }
         })
         .collect();
 
-    let mut all_sessions = sessions.clone();
-    for a in active.values() {
-        all_sessions.push(Session {
-            game_id: a.game_id.clone(),
-            start: a.start,
-            end: a.end,
-        });
-    }
     let stats = engine::compute(&all_sessions);
 
     Summary {
@@ -191,56 +223,56 @@ fn get_summary(state: State<AppState>) -> Summary {
             longest_session_seconds: stats.longest_session_seconds,
             sessions_count: stats.sessions_count,
         },
-        achievements: achievement_views(&state, &sessions),
+        achievements: achievement_views(&state.defs, &all_sessions, game_count, &unlocked_map),
     }
 }
 
 #[tauri::command]
 fn get_game_stats(state: State<AppState>, id: String) -> Result<GameStats, String> {
-    state
-        .games
-        .lock()
-        .unwrap()
-        .iter()
-        .find(|g| g.id == id)
-        .ok_or_else(|| "Игра не найдена".to_string())?;
-
-    let sessions = state.sessions.lock().unwrap();
-    let active = state.active.lock().unwrap();
-
-    let mut mine = game_stats_from(&sessions, &id);
-    if let Some(a) = active.get(&id) {
-        let open = [Session {
-            game_id: id.clone(),
-            start: a.start,
-            end: a.end,
-        }];
-        let open_stats = engine::compute(&open);
-        mine.total_seconds += open_stats.total_seconds;
-        mine.longest_session_seconds = mine
-            .longest_session_seconds
-            .max(open_stats.longest_session_seconds);
-        for (k, v) in open_stats.per_day {
-            *mine.per_day.entry(k).or_insert(0) += v;
+    let (mut mine, _active_open, last_played) = {
+        let games = state.games.lock().unwrap();
+        let game = games.iter().find(|g| g.id == id).ok_or("Игра не найдена")?;
+        let last_played = game.last_played.clone();
+        let sessions = state.sessions.lock().unwrap();
+        let active = state.active.lock().unwrap();
+        let mut mine: Vec<Session> = sessions
+            .iter()
+            .filter(|s| s.game_id == id)
+            .cloned()
+            .collect();
+        // вклад текущей незакрытой сессии — как в get_summary
+        if let Some(a) = active.get(&id) {
+            mine.push(Session::from(a));
         }
-    }
-    let today = Utc::now().date_naive().format("%Y-%m-%d").to_string();
-    let last_played = state
-        .games
-        .lock()
-        .unwrap()
-        .iter()
-        .find(|g| g.id == id)
-        .and_then(|g| g.last_played.clone());
+        (mine, active.contains_key(&id), last_played)
+    };
+
+    let st = engine::compute(&mine);
+    let today = Local::now().date_naive().format("%Y-%m-%d").to_string();
 
     Ok(GameStats {
-        total_seconds: mine.total_seconds,
-        today_seconds: mine.per_day.get(&today).copied().unwrap_or(0),
-        longest_session_seconds: mine.longest_session_seconds,
+        total_seconds: st.total_seconds,
+        today_seconds: st.per_day.get(&today).copied().unwrap_or(0),
+        longest_session_seconds: st.longest_session_seconds,
         last_played,
-        sessions_count: mine.sessions_count,
-        week: week_from(&mine.per_day),
+        // активная сессия уже внутри mine — счётчики согласованы с get_summary
+        sessions_count: st.sessions_count,
+        week: week_from(&st.per_day),
     })
+}
+
+/// Запись games.json: снимок под lock, запись после drop.
+fn persist_games(state: &AppState) {
+    let snapshot = state.games.lock().unwrap().clone();
+    store::save_json(&state.data_dir.join("games.json"), &snapshot)
+        .map_err(|e| eprintln!("nyx store: {}", e))
+        .ok();
+}
+
+fn persist_sessions(state: &AppState, snapshot: &[Session]) {
+    store::save_json(&state.data_dir.join("sessions.json"), &snapshot)
+        .map_err(|e| eprintln!("nyx store: {}", e))
+        .ok();
 }
 
 #[tauri::command]
@@ -248,51 +280,51 @@ fn add_game(state: State<AppState>, exe_path: String) -> Result<Game, String> {
     if !exe_path.to_lowercase().ends_with(".exe") {
         return Err("Это не exe-файл".into());
     }
-    let mut games = state.games.lock().unwrap();
-    if games
-        .iter()
-        .any(|g| g.exe_path.eq_ignore_ascii_case(&exe_path))
-    {
-        return Err("Эта игра уже в библиотеке".into());
-    }
-    let name = std::path::Path::new(&exe_path)
-        .file_stem()
-        .map(|s| s.to_string_lossy().to_string())
-        .ok_or("Не удалось получить имя игры")?;
+    let (game, snapshot) = {
+        let mut games = state.games.lock().unwrap();
+        if games
+            .iter()
+            .any(|g| g.exe_path.eq_ignore_ascii_case(&exe_path))
+        {
+            return Err("Эта игра уже в библиотеке".into());
+        }
+        let name = std::path::Path::new(&exe_path)
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .ok_or("Не удалось получить имя игры")?;
 
-    let game = Game {
-        id: format!("g_{}", Utc::now().timestamp_millis()),
-        name,
-        exe_path,
-        seconds_played: 0,
-        last_played: None,
+        let game = Game {
+            id: format!("g_{}", Local::now().timestamp_millis()),
+            name,
+            exe_path,
+            seconds_played: 0,
+            last_played: None,
+        };
+        games.push(game.clone());
+        (game, games.clone())
     };
-    games.push(game.clone());
-    store::save_json(&state.data_dir.join("games.json"), &*games).map_err(eprint_ok)?;
+    store::save_json(&state.data_dir.join("games.json"), &snapshot)
+        .map_err(|e| format!("Не удалось сохранить библиотеку: {}", e))?;
     Ok(game)
-}
-
-/// Ошибки сохранения не роняют команду: показ в лог, игра добавлена.
-fn eprint_ok(e: String) -> String {
-    eprintln!("nyx store: {}", e);
-    e
 }
 
 #[tauri::command]
 fn remove_game(state: State<AppState>, id: String) -> Result<(), String> {
-    {
+    let (games_snapshot, sessions_snapshot) = {
         let mut games = state.games.lock().unwrap();
         let len_before = games.len();
         games.retain(|g| g.id != id);
         if games.len() == len_before {
             return Err("Игра не найдена".into());
         }
-        store::save_json(&state.data_dir.join("games.json"), &*games).map_err(eprint_ok)?;
-    }
-    state.sessions.lock().unwrap().retain(|s| s.game_id != id);
-    state.active.lock().unwrap().remove(&id);
-    store::save_json(&state.data_dir.join("sessions.json"), &*state.sessions.lock().unwrap())
-        .map_err(eprint_ok)?;
+        let mut sessions = state.sessions.lock().unwrap();
+        sessions.retain(|s| s.game_id != id);
+        state.active.lock().unwrap().remove(&id);
+        (games.clone(), sessions.clone())
+    };
+    store::save_json(&state.data_dir.join("games.json"), &games_snapshot)
+        .map_err(|e| format!("Не удалось сохранить библиотеку: {}", e))?;
+    persist_sessions(&state, &sessions_snapshot);
     Ok(())
 }
 
@@ -309,146 +341,172 @@ fn launch_game(state: State<AppState>, id: String) -> Result<(), String> {
             g.last_played = Some(now_rfc3339());
         }
     }
+    persist_games(&state);
     std::process::Command::new(&exe)
         .spawn()
         .map_err(|e| format!("Не удалось запустить: {}", e))?;
     Ok(())
 }
 
+/// Нормализация пути для сравнения: единый разделитель + нижний регистр.
+fn norm_path(p: &str) -> String {
+    p.replace('/', "\\").to_lowercase()
+}
+
 /// Каждый тик: сессии открываются/продлеваются/закрываются по живым процессам,
 /// ачивки переоцениваются, новые открываются и сохраняются.
 fn spawn_tracker(app: AppHandle) {
-    thread::spawn(move || {
-        loop {
-            thread::sleep(Duration::from_secs(TICK_SECS));
-            let state = app.state::<AppState>();
-            let wanted: Vec<(String, String)> = {
-                let games = state.games.lock().unwrap();
-                games
-                    .iter()
-                    .map(|g| {
-                        let exe = std::path::Path::new(&g.exe_path)
-                            .file_name()
-                            .map(|s| s.to_string_lossy().to_lowercase())
-                            .unwrap_or_default();
-                        (g.id.clone(), exe)
-                    })
-                    .collect()
-            };
-            if wanted.is_empty() {
-                continue;
-            }
+    thread::spawn(move || loop {
+        thread::sleep(Duration::from_secs(TICK_SECS));
 
-            let sys = sysinfo::System::new_all();
-            let running: std::collections::HashSet<String> = sys
-                .processes()
-                .values()
-                .filter_map(|p| p.exe())
-                .filter_map(|e| e.file_name())
-                .map(|n| n.to_string_lossy().to_lowercase())
-                .collect();
+        let state = app.state::<AppState>();
+        // матч по полному пути exe (нормализованному): одинаковые имена файлов
+        // у разных игр больше не путают счётчик
+        let wanted: Vec<(String, String)> = {
+            let games = state.games.lock().unwrap();
+            games
+                .iter()
+                .map(|g| (g.id.clone(), norm_path(&g.exe_path)))
+                .collect()
+        };
+        if wanted.is_empty() {
+            continue;
+        }
 
-            let ts = now_ts();
-            let mut changed = false;
-            let mut any_playing = false;
+        let sys = sysinfo::System::new_all();
+        let running: std::collections::HashSet<String> = sys
+            .processes()
+            .values()
+            .filter_map(|p| p.exe())
+            .map(|e| norm_path(&e.to_string_lossy()))
+            .collect();
 
-            {
-                let mut active = state.active.lock().unwrap();
-                for (id, exe) in &wanted {
-                    if running.contains(exe) {
-                        any_playing = true;
-                        match active.get_mut(id) {
-                            Some(a) => a.end = ts,
-                            None => {
-                                active.insert(
-                                    id.clone(),
-                                    ActiveSession {
-                                        game_id: id.clone(),
-                                        start: ts,
-                                        end: ts,
-                                    },
-                                );
-                                changed = true;
-                            }
+        let ts = now_ts();
+        let mut changed = false;
+        let mut any_playing = false;
+
+        // 1) обновляем активные сессии; закрывшиеся забираем и отпускаем active
+        let closed: Vec<ActiveSession> = {
+            let mut active = state.active.lock().unwrap();
+            let mut closed = Vec::new();
+            for (id, exe) in &wanted {
+                if running.contains(exe) {
+                    any_playing = true;
+                    match active.get_mut(id) {
+                        Some(a) => a.end = ts,
+                        None => {
+                            active.insert(
+                                id.clone(),
+                                ActiveSession {
+                                    game_id: id.clone(),
+                                    start: ts,
+                                    end: ts,
+                                },
+                            );
+                            changed = true;
                         }
-                    } else if let Some(a) = active.remove(id) {
-                        // сессия закрылась: фиксируем и зачисляем часы
-                        if a.end > a.start {
-                            state.sessions.lock().unwrap().push(Session {
-                                game_id: a.game_id.clone(),
-                                start: a.start,
-                                end: a.end,
-                            });
-                            let mut games = state.games.lock().unwrap();
-                            if let Some(g) = games.iter_mut().find(|g| g.id == *id) {
-                                g.seconds_played += (a.end - a.start) as u64;
-                            }
-                        }
-                        changed = true;
+                    }
+                } else if let Some(a) = active.remove(id) {
+                    changed = true;
+                    if a.end > a.start {
+                        closed.push(a);
                     }
                 }
             }
+            closed
+        };
 
-            // ачивки: закрытые + открытые сессии
-            let new_unlock = {
-                let sessions = state.sessions.lock().unwrap();
-                let mut all = sessions.clone();
-                for a in state.active.lock().unwrap().values() {
-                    all.push(Session {
-                        game_id: a.game_id.clone(),
-                        start: a.start,
-                        end: a.end,
-                    });
-                }
-                let stats = engine::compute(&all);
-                let ctx = EvalContext {
-                    game_count: state.games.lock().unwrap().len() as u32,
-                };
-                let outcomes = engine::evaluate(&state.defs, &stats, &ctx);
-                let mut unlocked = state.unlocked.lock().unwrap();
-                let mut fresh = false;
-                for o in outcomes {
-                    if o.unlocked && !unlocked.contains_key(&o.id) {
-                        unlocked.insert(o.id, now_rfc3339());
-                        fresh = true;
+        // 2) закрывшиеся сессии: games → sessions, запись после drop
+        if !closed.is_empty() {
+            let sessions_snapshot = {
+                let mut games = state.games.lock().unwrap();
+                let mut sessions = state.sessions.lock().unwrap();
+                for a in &closed {
+                    sessions.push(Session::from(a));
+                    if let Some(g) = games.iter_mut().find(|g| g.id == a.game_id) {
+                        g.seconds_played += a.seconds();
                     }
                 }
-                if fresh {
-                    store::save_json(
-                        &state.data_dir.join("achievements.json"),
-                        &*unlocked,
-                    )
-                    .map_err(eprint_ok)
-                    .ok();
-                }
-                fresh
+                all_sessions_snapshot(&sessions, &state.active.lock().unwrap())
             };
+            persist_sessions(&state, &sessions_snapshot);
+            persist_games(&state);
+        }
 
-            // сохранение сессий при изменениях активного набора
-            if changed {
-                let mut all = state.sessions.lock().unwrap().clone();
-                for a in state.active.lock().unwrap().values() {
-                    all.push(Session {
-                        game_id: a.game_id.clone(),
-                        start: a.start,
-                        end: a.end,
-                    });
+        // 3) ачивки: снимок под lock, расчёт и запись после drop
+        let new_unlock = {
+            let games = state.games.lock().unwrap();
+            let sessions = state.sessions.lock().unwrap();
+            let active = state.active.lock().unwrap();
+            let all = all_sessions_snapshot(&sessions, &active);
+            let game_count = games.len() as u32;
+            let mut unlocked = state.unlocked.lock().unwrap();
+            let outcomes = engine::evaluate(&state.defs, &engine::compute(&all), &EvalContext { game_count });
+            let mut fresh = false;
+            for o in outcomes {
+                if o.unlocked && !unlocked.contains_key(&o.id) {
+                    unlocked.insert(o.id, now_rfc3339());
+                    fresh = true;
                 }
-                store::save_json(&state.data_dir.join("sessions.json"), &all)
-                    .map_err(eprint_ok)
-                    .ok();
             }
+            let unlocked_snapshot = unlocked.clone();
+            (fresh, unlocked_snapshot, all, game_count)
+        };
+        if new_unlock.0 {
+            store::save_json(&state.data_dir.join("achievements.json"), &new_unlock.1)
+                .map_err(|e| eprintln!("nyx store: {}", e))
+                .ok();
+        }
 
-            if changed || any_playing || new_unlock {
-                let _ = app.emit("library-changed", ());
+        // 4) снимок сессий с активными — чтобы закрытие окна не теряло часы;
+        // дубликаты схлопываются при следующей загрузке (dedupe_sessions)
+        {
+            let sessions = state.sessions.lock().unwrap();
+            let active = state.active.lock().unwrap();
+            let snapshot = all_sessions_snapshot(&sessions, &active);
+            drop(sessions);
+            drop(active);
+            if any_playing || changed {
+                persist_sessions(&state, &snapshot);
             }
+        }
+
+        if changed || any_playing || new_unlock.0 {
+            let _ = app.emit("library-changed", ());
         }
     });
 }
 
+/// При выходе приложения: закрытые окна терять нельзя — фиксируем активные сессии.
+fn commit_active_sessions(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    let closed: Vec<ActiveSession> = {
+        let mut active = state.active.lock().unwrap();
+        let v: Vec<ActiveSession> = active.values().cloned().collect();
+        active.clear();
+        v
+    };
+    if closed.is_empty() {
+        return;
+    }
+    let sessions_snapshot = {
+        let mut games = state.games.lock().unwrap();
+        let mut sessions = state.sessions.lock().unwrap();
+        for a in &closed {
+            sessions.push(Session::from(a));
+            if let Some(g) = games.iter_mut().find(|g| g.id == a.game_id) {
+                g.seconds_played += a.seconds();
+            }
+        }
+        sessions.clone()
+    };
+    persist_sessions(&state, &sessions_snapshot);
+    persist_games(&state);
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
@@ -458,17 +516,18 @@ pub fn run() {
                 .app_data_dir()
                 .expect("не удалось найти папку данных");
 
-            let games: Vec<Game> =
+            let mut games: Vec<Game> =
                 store::load_json(&data_dir.join("games.json")).unwrap_or_default();
-            let sessions: Vec<Session> =
+            let mut sessions: Vec<Session> =
                 store::load_json(&data_dir.join("sessions.json")).unwrap_or_default();
+            // активная сессия прошлой запуска могла попасть в файл снимком — схлопываем
+            engine::dedupe_sessions(&mut sessions);
             let unlocked: HashMap<String, String> =
                 store::load_json(&data_dir.join("achievements.json")).unwrap_or_default();
             let defs: Vec<AchievementDef> =
                 serde_json::from_str(ACHIEVEMENTS_JSON).expect("битый achievements.json");
 
             // секунды на витрине — истина из сессий
-            let mut games = games;
             for g in games.iter_mut() {
                 g.seconds_played = engine::compute(
                     &sessions
@@ -479,6 +538,10 @@ pub fn run() {
                 )
                 .total_seconds;
             }
+            let games_snapshot = games.clone();
+            store::save_json(&data_dir.join("games.json"), &games_snapshot)
+                .map_err(|e| eprintln!("nyx store: {}", e))
+                .ok();
 
             app.manage(AppState {
                 games: Mutex::new(games),
@@ -491,13 +554,12 @@ pub fn run() {
             spawn_tracker(handle);
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![
-            get_summary,
-            get_game_stats,
-            add_game,
-            remove_game,
-            launch_game
-        ])
-        .run(tauri::generate_context!())
+        .build(tauri::generate_context!())
         .expect("ошибка запуска NyxLauncher");
+
+    app.run(|app_handle, event| {
+        if let RunEvent::Exit = event {
+            commit_active_sessions(app_handle);
+        }
+    });
 }

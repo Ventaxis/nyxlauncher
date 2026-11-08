@@ -1,9 +1,9 @@
 // Движок статистики и ачивок NyxLauncher — чистые функции, без tauri.
 // Тестируется отдельно от приложения (cargo test).
 
-use chrono::{NaiveDate, TimeZone, Timelike, Utc};
+use chrono::{Local, NaiveDate, TimeZone, Timelike};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// Одна игровая сессия: от появления процесса до его исчезновения.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -95,13 +95,14 @@ fn secs_between(start: i64, end: i64) -> u64 {
 }
 
 fn date_key(ts: i64) -> String {
-    Utc.timestamp_opt(ts, 0)
+    Local
+        .timestamp_opt(ts, 0)
         .single()
         .map(|dt| dt.format("%Y-%m-%d").to_string())
         .unwrap_or_default()
 }
 
-/// Аггрегация сессий в статистику. Сессия целиком относится к дате начала (UTC).
+/// Аггрегация сессий в статистику. Сессия целиком относится к дате начала (локальное время).
 pub fn compute(sessions: &[Session]) -> Stats {
     let mut s = Stats::default();
     let mut distinct = HashSet::new();
@@ -111,7 +112,7 @@ pub fn compute(sessions: &[Session]) -> Stats {
         s.longest_session_seconds = s.longest_session_seconds.max(dur);
         distinct.insert(sess.game_id.clone());
         *s.per_day.entry(date_key(sess.start)).or_insert(0) += dur;
-        if let Some(dt) = Utc.timestamp_opt(sess.start, 0).single() {
+        if let Some(dt) = Local.timestamp_opt(sess.start, 0).single() {
             s.start_hour_counts[dt.hour() as usize] += 1;
         }
     }
@@ -119,6 +120,29 @@ pub fn compute(sessions: &[Session]) -> Stats {
     s.distinct_games = distinct.len() as u64;
     s.streak_days = streak(&s.per_day);
     s
+}
+
+/// Схлопывание дубликатов сессий (одинаковая игра и старт — например,
+/// активная сессия попала в файл, а потом закрылась и записалась снова):
+/// оставляем вариант с максимальным end.
+pub fn dedupe_sessions(sessions: &mut Vec<Session>) {
+    let mut best: HashMap<(String, i64), usize> = HashMap::new();
+    let mut kept: Vec<Session> = Vec::with_capacity(sessions.len());
+    for s in sessions.drain(..) {
+        let key = (s.game_id.clone(), s.start);
+        match best.get(&key) {
+            Some(&i) => {
+                if s.end > kept[i].end {
+                    kept[i].end = s.end;
+                }
+            }
+            None => {
+                best.insert(key, kept.len());
+                kept.push(s);
+            }
+        }
+    }
+    *sessions = kept;
 }
 
 /// Самая длинная серия подряд идущих дней с игрой.
@@ -212,15 +236,32 @@ mod tests {
     use super::*;
 
     fn sess(game: &str, start_iso: &str, dur_secs: i64) -> Session {
-        let start = chrono::NaiveDateTime::parse_from_str(start_iso, "%Y-%m-%d %H:%M:%S")
+        // интерпретируем строку как ЛОКАЛЬНОЕ время (как и продакшн-код)
+        let naive = chrono::NaiveDateTime::parse_from_str(start_iso, "%Y-%m-%d %H:%M:%S").unwrap();
+        let start = naive
+            .and_local_timezone(Local)
+            .single()
             .unwrap()
-            .and_utc()
             .timestamp();
         Session {
             game_id: game.into(),
             start,
             end: start + dur_secs,
         }
+    }
+
+    #[test]
+    fn dedupe_keeps_longest_end_for_same_start() {
+        let mut v = vec![
+            sess("a", "2026-11-08 10:00:00", 60),
+            sess("a", "2026-11-08 10:00:00", 300),
+            sess("a", "2026-11-08 11:00:00", 120),
+            sess("b", "2026-11-08 10:00:00", 60),
+        ];
+        dedupe_sessions(&mut v);
+        assert_eq!(v.len(), 3);
+        let merged = v.iter().find(|s| s.game_id == "a" && s.end - s.start == 300);
+        assert!(merged.is_some(), "должен остаться самый длинный вариант");
     }
 
     // ── Слайс 1: агрегация ────────────────────────────────

@@ -21,6 +21,7 @@ src-tauri/gen/
 # === Node ===
 node_modules/
 dist/
+ui/dist/
 
 # === Инструменты и установщики ===
 downloads/
