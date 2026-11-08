@@ -19,6 +19,7 @@ let summary = { games: [], totals: null, achievements: [] };
 let stats = null;            // ответ get_game_stats выбранной игры
 let selectedId = null;
 let query = '';
+let view = 'grid';           // 'grid' — витрина библиотеки, 'detail' — страница игры
 
 // Локальная интерполяция сессии: сервер — истина по факту playing,
 // таймер просто отсчитывает время с момента, когда playing появился
@@ -36,6 +37,8 @@ const els = {
   streakVal: $('streak-val'),
   empty: $('empty'),
   emptyAdd: $('btn-empty-add'),
+  grid: $('grid'),
+  back: $('btn-back'),
   detail: $('detail'),
   title: $('game-title'),
   hoursNum: $('game-hours'),
@@ -140,10 +143,69 @@ function visibleGames() {
 function render() {
   renderSidebar();
   const g = currentGame();
+  const showDetail = Boolean(g) && view === 'detail';
   els.empty.hidden = summary.games.length > 0;
-  els.detail.hidden = !g;
-  if (g) renderDetail(g, stats);
+  els.detail.hidden = !showDetail;
+  els.grid.hidden = showDetail || summary.games.length === 0;
+  if (showDetail) {
+    renderDetail(g, stats);
+  } else {
+    renderGrid();
+  }
   renderStatusPlay();
+}
+
+/* ── Витрина: сетка корешков ────────────────────────────────────── */
+
+function renderGrid() {
+  els.grid.textContent = '';
+  const shown = visibleGames();
+
+  if (!shown.length) {
+    const note = document.createElement('p');
+    note.className = 'grid-note';
+    note.textContent = query.trim() ? 'Ничего не найдено' : 'Добавьте игры — они появятся корешками на полке';
+    els.grid.appendChild(note);
+    return;
+  }
+
+  for (const g of shown) {
+    const card = document.createElement('button');
+    card.type = 'button';
+    card.className = 'cell' + (g.id === selectedId ? ' is-active' : '');
+    card.style.setProperty('--h', hueOf(g.name).toFixed(1));
+    if (g.id === selectedId) card.setAttribute('aria-current', 'true');
+
+    const letter = document.createElement('span');
+    letter.className = 'cell-letter';
+    letter.textContent = (g.name.trim()[0] || 'N').toUpperCase();
+
+    const name = document.createElement('span');
+    name.className = 'cell-name';
+    name.textContent = g.name;
+
+    const rule = document.createElement('span');
+    rule.className = 'cell-rule';
+
+    const hours = document.createElement('span');
+    hours.className = 'cell-hours mono';
+    hours.textContent = fmtHours(g.seconds_played);
+
+    card.appendChild(letter);
+    card.appendChild(name);
+    card.appendChild(rule);
+    card.appendChild(hours);
+
+    if (g.playing) {
+      const mark = document.createElement('span');
+      mark.className = 'cell-mark';
+      mark.innerHTML = icon('crescent');
+      card.appendChild(mark);
+    }
+
+    card.addEventListener('click', () => selectGame(g.id));
+    els.grid.appendChild(card);
+  }
 }
 
 function renderSidebar() {
@@ -470,14 +532,16 @@ async function refresh() {
   }
   if (!summary.games.some((g) => g.id === selectedId)) {
     selectedId = summary.games.length ? summary.games[0].id : null;
+    if (!selectedId) view = 'grid';
   }
   reconcilePlaying();
   render();
 }
 
 async function selectGame(id) {
-  if (id === selectedId) return;
+  if (id === selectedId && view === 'detail') return;
   selectedId = id;
+  view = 'detail';
   stats = null;
   if (invoke) {
     try {
@@ -556,13 +620,18 @@ async function playGame() {
 
 els.search.addEventListener('input', () => {
   query = els.search.value;
-  renderSidebar();
+  if (query.trim()) view = 'grid';
+  render();
 });
 
 els.add.addEventListener('click', addGame);
 els.emptyAdd.addEventListener('click', addGame);
 els.play.addEventListener('click', playGame);
 els.remove.addEventListener('click', removeGame);
+els.back.addEventListener('click', () => {
+  view = 'grid';
+  render();
+});
 
 if (T) {
   T.event.listen('library-changed', () => refresh());
