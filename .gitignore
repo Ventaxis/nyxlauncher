@@ -1,0 +1,33 @@
+# === SECRETS — НИКОГДА НЕ КОММИТИТЬ ===
+KEYS ALL
+KEYS*
+*keys all*
+*.key
+*.pem
+*.pfx
+*.p12
+*.crt
+*.token
+.env
+.env.*
+secrets*
+*secret*
+*.local
+
+# === Rust / Tauri ===
+src-tauri/target/
+src-tauri/gen/
+
+# === Node ===
+node_modules/
+dist/
+
+# === Инструменты и установщики ===
+downloads/
+*.exe
+!src-tauri/icons/*.ico
+
+# === Системное ===
+.DS_Store
+Thumbs.db
+*.log
