@@ -200,7 +200,7 @@ fn measure(cond: &Condition, stats: &Stats, ctx: &EvalContext) -> (bool, f64, f6
             let hit = if from < to {
                 (from..to).any(|h| stats.start_hour_counts[h as usize] > 0)
             } else {
-                (0..24).any(|h| stats.start_hour_counts[h] > 0 && (h >= from || h < to))
+                (0u32..24).any(|h| stats.start_hour_counts[h as usize] > 0 && (h >= from || h < to))
             };
             (hit, if hit { 1.0 } else { 0.0 }, 1.0)
         }
