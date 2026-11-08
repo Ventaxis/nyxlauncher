@@ -1,6 +1,6 @@
 // Персистентность NyxLauncher: атомарная запись JSON + загрузка с деградацией до дефолта.
 
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Serialize};
 use std::fs;
 use std::path::Path;
 
@@ -25,6 +25,7 @@ pub fn load_json<T: DeserializeOwned>(path: &Path) -> Option<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde::Deserialize;
 
     #[derive(Serialize, Deserialize, PartialEq, Debug)]
     struct Doc {
