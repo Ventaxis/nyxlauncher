@@ -24,6 +24,7 @@ dist/
 
 # === Инструменты и установщики ===
 downloads/
+artifacts/
 *.exe
 !src-tauri/icons/*.ico
 

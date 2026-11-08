@@ -3,63 +3,160 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="color-scheme" content="dark" />
   <title>NyxLauncher</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-  <header class="topbar">
-    <div class="logo">
-      <span class="logo-moon">🌙</span>
-      <span class="logo-text">Nyx<span class="logo-accent">Launcher</span></span>
+
+  <!-- Иконки: lucide-стиль, stroke 1.5, 16px. Полумесяц — свой контур (заливка). -->
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <defs>
+      <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+      <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7.5"/><path d="m20.5 20.5-4.55-4.55"/></symbol>
+      <symbol id="i-play" viewBox="0 0 24 24"><path d="M7.5 5.2v13.6l11-6.8z"/></symbol>
+      <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16"/><path d="M9.5 7V4.5h5V7"/><path d="M6.5 7l.8 12.5h9.4L17.5 7"/><path d="M10 11v5M14 11v5"/></symbol>
+      <symbol id="i-lock" viewBox="0 0 24 24"><rect x="4.5" y="10.5" width="15" height="10" rx="2"/><path d="M8 10.5V7a4 4 0 0 1 8 0v3.5"/></symbol>
+      <symbol id="i-flame" viewBox="0 0 24 24"><path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.07-2.14-.22-4.05 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.15.43-2.29 1-3a2.5 2.5 0 0 0 2.5 2.5z"/></symbol>
+      <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3.2 1.9"/></symbol>
+      <symbol id="i-chart" viewBox="0 0 24 24"><path d="M3.5 3.5v17h17"/><path d="m7.5 14.5 3.5-4.5 3.5 2.5 4.5-6"/></symbol>
+      <symbol id="i-trophy" viewBox="0 0 24 24"><path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/><path d="M4 22h16"/><path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22"/><path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22"/><path d="M18 2H6v7a6 6 0 0 0 12 0V2Z"/></symbol>
+      <symbol id="i-crescent" viewBox="0 0 24 24"><path d="M14.25 2.55A9.75 9.75 0 1 0 21.45 9.75 7.5 7.5 0 0 1 14.25 2.55Z" fill="currentColor" stroke="none"/></symbol>
+    </defs>
+  </svg>
+
+  <div class="app">
+
+    <header class="topbar">
+      <div class="brand">
+        <svg class="icon" aria-hidden="true"><use href="#i-crescent"/></svg>
+        <span class="brand-name">NyxLauncher</span>
+      </div>
+      <div class="search">
+        <svg class="icon" aria-hidden="true"><use href="#i-search"/></svg>
+        <input id="search" type="text" placeholder="Поиск" aria-label="Поиск по библиотеке" autocomplete="off" spellcheck="false" />
+      </div>
+      <div class="tb-right">
+        <button id="btn-add" class="btn btn-primary" type="button">
+          <svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg>
+          Добавить
+        </button>
+      </div>
+    </header>
+
+    <div class="shell">
+
+      <aside class="sidebar">
+        <div class="side-head">
+          <span class="side-title">Библиотека</span>
+          <span id="side-count" class="side-count mono"></span>
+        </div>
+        <nav id="game-list" class="game-list" aria-label="Игры"></nav>
+        <div class="side-foot">
+          <div class="foot-hours">
+            <span id="total-hours" class="foot-num mono">0 ч</span>
+            <span class="foot-label">всего</span>
+          </div>
+          <div id="foot-streak" class="foot-streak" hidden>
+            <svg class="icon" aria-hidden="true"><use href="#i-flame"/></svg>
+            <span id="streak-val" class="mono"></span>
+          </div>
+        </div>
+      </aside>
+
+      <main class="content">
+
+        <section id="empty" class="empty" hidden>
+          <h2>Библиотека пуста</h2>
+          <p>Добавьте первый exe — Nyx начнёт считать часы</p>
+          <button id="btn-empty-add" class="btn btn-primary" type="button">
+            <svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg>
+            Добавить игру
+          </button>
+        </section>
+
+        <section id="detail" hidden>
+          <div class="game-head">
+            <div class="cover" id="cover">
+              <span class="cover-letter" id="cover-letter"></span>
+              <span class="cover-name" id="cover-name"></span>
+              <div class="cover-rule"></div>
+              <span class="cover-exe mono" id="cover-exe"></span>
+            </div>
+            <div class="game-info">
+              <div class="info-row">
+                <h1 id="game-title" class="game-title"></h1>
+                <div class="hours-block">
+                  <span id="game-hours" class="hours-num mono">0 ч</span>
+                  <span class="hours-label">всего</span>
+                </div>
+              </div>
+              <div class="game-meta">
+                <svg class="icon" aria-hidden="true"><use href="#i-clock"/></svg>
+                <span id="game-last"></span>
+              </div>
+              <div class="game-actions">
+                <button id="btn-play" class="btn btn-primary" type="button">
+                  <svg class="icon" aria-hidden="true"><use href="#i-play"/></svg>
+                  Играть
+                </button>
+                <button id="btn-remove" class="btn btn-quiet" type="button">
+                  <svg class="icon" aria-hidden="true"><use href="#i-trash"/></svg>
+                  Убрать
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div class="stats">
+            <div class="stat">
+              <div class="stat-label">Сегодня</div>
+              <div id="stat-today" class="stat-num mono">0 ч</div>
+            </div>
+            <div class="stat">
+              <div class="stat-label">За неделю</div>
+              <div id="stat-week" class="stat-num mono">0 ч</div>
+            </div>
+            <div class="stat">
+              <div class="stat-label">Рекорд сессии</div>
+              <div id="stat-record" class="stat-num mono">0 ч</div>
+            </div>
+          </div>
+
+          <section class="sec">
+            <div class="sec-head">
+              <h2 class="sec-title">
+                <svg class="icon" aria-hidden="true"><use href="#i-chart"/></svg>
+                Неделя
+              </h2>
+            </div>
+            <div class="chart" id="chart-wrap">
+              <canvas id="chart"></canvas>
+            </div>
+          </section>
+
+          <section class="sec">
+            <div class="sec-head">
+              <h2 class="sec-title">Достижения</h2>
+              <span id="ach-count" class="sec-count mono"></span>
+            </div>
+            <div id="ach-grid" class="ach-grid"></div>
+          </section>
+        </section>
+
+      </main>
     </div>
-    <button id="btn-add" class="btn btn-primary">+ Добавить игру</button>
-  </header>
 
-  <main class="layout">
-    <aside class="sidebar">
-      <div class="sidebar-title">Библиотека</div>
-      <ul id="game-list" class="game-list"></ul>
-    </aside>
-
-    <section class="content" id="content">
-      <div class="empty-state" id="empty-state">
-        <div class="empty-moon">🐈‍⬛</div>
-        <h2>Библиотека пуста</h2>
-        <p>Добавь первый .exe — и Nyx начнёт считать твои игровые часы, мяу~</p>
+    <footer class="statusbar">
+      <span id="status-left" class="mono">NyxLauncher 0.2</span>
+      <div id="status-play" class="status-play" hidden>
+        <svg class="icon" aria-hidden="true"><use href="#i-crescent"/></svg>
+        <span id="sp-name"></span>
+        <span id="sp-timer" class="mono">0:00</span>
       </div>
+    </footer>
 
-      <div class="game-detail" id="game-detail" hidden>
-        <div class="cover" id="cover">
-          <div class="cover-icon">🎮</div>
-        </div>
-        <div class="detail-info">
-          <h1 id="game-name">—</h1>
-          <div class="stats-row">
-            <div class="stat">
-              <div class="stat-value" id="stat-hours">0 ч</div>
-              <div class="stat-label">наиграно</div>
-            </div>
-            <div class="stat">
-              <div class="stat-value" id="stat-last">—</div>
-              <div class="stat-label">последний запуск</div>
-            </div>
-          </div>
-          <div class="detail-actions">
-            <button id="btn-play" class="btn btn-primary btn-big">▶ Играть</button>
-            <button id="btn-remove" class="btn btn-danger">Убрать из библиотеки</button>
-          </div>
-          <div class="achievements">
-            <div class="achievements-title">Достижения</div>
-            <div class="achievements-placeholder">🐾 Появятся в версии 0.2 — Nyx уже точит коготки</div>
-          </div>
-        </div>
-      </div>
-    </section>
-  </main>
-
-  <footer class="statusbar">
-    <span id="status-text">🐾 NyxLauncher MVP — Ventaxis Corp</span>
-  </footer>
+  </div>
 
   <script src="main.js"></script>
 </body>
