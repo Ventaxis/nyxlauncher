@@ -34,6 +34,9 @@ jobs:
       - name: Install Tauri CLI
         run: npm ci
 
+      - name: Tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+
       - name: Build
         run: npx tauri build
 

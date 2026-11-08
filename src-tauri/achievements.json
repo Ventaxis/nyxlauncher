@@ -1,0 +1,72 @@
+[
+  {
+    "id": "first_launch",
+    "title": "Первый запуск",
+    "description": "Запустить любую игру из библиотеки",
+    "icon": "play",
+    "condition": { "type": "session_count", "count": 1 }
+  },
+  {
+    "id": "hour_of_moon",
+    "title": "Час луны",
+    "description": "Наиграть один час суммарно",
+    "icon": "clock",
+    "condition": { "type": "total_seconds", "seconds": 3600 }
+  },
+  {
+    "id": "ten_hours",
+    "title": "Десяточка",
+    "description": "Наиграть десять часов суммарно",
+    "icon": "clock",
+    "condition": { "type": "total_seconds", "seconds": 36000 }
+  },
+  {
+    "id": "hundred_hours",
+    "title": "Сотня",
+    "description": "Наиграть сто часов суммарно",
+    "icon": "trophy",
+    "condition": { "type": "total_seconds", "seconds": 360000 }
+  },
+  {
+    "id": "night_shift",
+    "title": "Ночная смена",
+    "description": "Начать сессию между полночью и пятью утра",
+    "icon": "moon",
+    "condition": { "type": "session_start_hour", "from": 0, "to": 5 }
+  },
+  {
+    "id": "marathon",
+    "title": "Марафонец",
+    "description": "Провести одну сессию дольше трёх часов",
+    "icon": "flame",
+    "condition": { "type": "session_seconds", "seconds": 10800 }
+  },
+  {
+    "id": "collector",
+    "title": "Коллекционер",
+    "description": "Собрать пять игр в библиотеке",
+    "icon": "archive",
+    "condition": { "type": "game_count", "count": 5 }
+  },
+  {
+    "id": "explorer",
+    "title": "Исследователь",
+    "description": "Поиграть в три разные игры",
+    "icon": "compass",
+    "condition": { "type": "distinct_games", "count": 3 }
+  },
+  {
+    "id": "persistence",
+    "title": "Постоянство",
+    "description": "Играть три дня подряд",
+    "icon": "calendar",
+    "condition": { "type": "streak_days", "days": 3 }
+  },
+  {
+    "id": "week_streak",
+    "title": "Неделя в игре",
+    "description": "Играть семь дней подряд",
+    "icon": "calendar",
+    "condition": { "type": "streak_days", "days": 7 }
+  }
+]
