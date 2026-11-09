@@ -13,8 +13,20 @@ function ShelfTotal({ seconds }) {
   );
 }
 
-export default function Shelf({ summary, query, entered, onOpen, onAdd }) {
+export default function Shelf({ summary, query, entered, onOpen, onAdd, error, onRetry }) {
   if (!summary) {
+    if (error) {
+      return (
+        <div className="boot boot-error" role="alert">
+          <p className="boot-title">Архив не открылся</p>
+          <p className="boot-text mono">{error}</p>
+          <button type="button" className="btn btn-primary" onClick={onRetry}>
+            <svg className="icon" aria-hidden="true"><use href="#i-play" /></svg>
+            Повторить
+          </button>
+        </div>
+      );
+    }
     return <p className="boot mono">открываю архив…</p>;
   }
 

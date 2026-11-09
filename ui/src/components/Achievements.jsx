@@ -3,7 +3,8 @@ import { fmtShortDate } from '../format.js';
 
 const FLASH_MS = 900;
 
-// Пороги из src-tauri/achievements.json — для текста «2,1 / 3 ч».
+// Резервные пороги для демо-данных: ядро присылает готовые
+// progress_value/threshold/unit/decimals, но предпросмотр в браузере — нет.
 const THRESHOLDS = {
   first_launch: { value: 1, unit: 'шт', dec: 0 },
   hour_of_moon: { value: 1, unit: 'ч', dec: 1 },
@@ -20,11 +21,19 @@ const THRESHOLDS = {
 const nf = new Intl.NumberFormat('ru-RU');
 
 function fmtProgress(a) {
-  const t = THRESHOLDS[a.id];
+  // Порог и текущее значение берём у ядра, чтобы правка achievements.json
+  // сразу меняла подпись. Для демо-данных откатываемся на локальную таблицу.
+  const t = a.threshold > 0
+    ? { value: a.threshold, unit: a.unit || '', dec: a.decimals ?? 0 }
+    : THRESHOLDS[a.id];
   if (!t) return null;
-  const cur = t.value * Math.max(0, Math.min(1, a.progress || 0));
-  const curStr = t.dec ? nf.format(Math.round(cur * 10) / 10) : nf.format(Math.round(cur));
-  return `${curStr} / ${nf.format(t.value)} ${t.unit}`;
+  const cur = Number.isFinite(a.progress_value)
+    ? a.progress_value
+    : t.value * Math.max(0, Math.min(1, a.progress || 0));
+  const k = 10 ** t.dec;
+  const curStr = nf.format(Math.round(cur * k) / k);
+  const maxStr = nf.format(Math.round(t.value * k) / k);
+  return `${curStr} / ${maxStr}${t.unit ? ` ${t.unit}` : ''}`;
 }
 
 function clampPct(a) {

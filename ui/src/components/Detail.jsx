@@ -35,9 +35,14 @@ export default function Detail({ game, stats, achievements, onBack, onLaunch, on
             <span>последний запуск: {fmtLastPlayed(game.last_played)}</span>
           </div>
           <div className="detail-actions">
-            <button type="button" className="btn btn-primary" onClick={onLaunch}>
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={onLaunch}
+              disabled={game.playing}
+            >
               <svg className="icon" aria-hidden="true"><use href="#i-play" /></svg>
-              Играть
+              {game.playing ? 'Играет' : 'Играть'}
             </button>
             <button type="button" className="btn btn-quiet" onClick={onRemove}>
               <svg className="icon" aria-hidden="true"><use href="#i-trash" /></svg>

@@ -5,7 +5,7 @@ use std::fs;
 use std::path::Path;
 
 /// Сохранение через tmp + rename, чтобы сбой не оставил битый файл.
-pub fn save_json<T: Serialize>(path: &Path, value: &T) -> Result<(), String> {
+pub fn save_json<T: Serialize + ?Sized>(path: &Path, value: &T) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
@@ -16,10 +16,15 @@ pub fn save_json<T: Serialize>(path: &Path, value: &T) -> Result<(), String> {
     Ok(())
 }
 
-/// Загрузка: нет файла или он битый — None (вызывающий берёт дефолт).
-pub fn load_json<T: DeserializeOwned>(path: &Path) -> Option<T> {
-    let text = fs::read_to_string(path).ok()?;
-    serde_json::from_str(&text).ok()
+/// Загрузка: нет файла — Ok(None); ошибка чтения или битый JSON — Err,
+/// чтобы вызывающий мог сохранить исходный файл, а не затереть его дефолтом.
+pub fn load_json<T: DeserializeOwned>(path: &Path) -> Result<Option<T>, String> {
+    let text = match fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e.to_string()),
+    };
+    serde_json::from_str(&text).map(Some).map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -41,7 +46,7 @@ mod tests {
             n: 42,
         };
         save_json(&path, &doc).expect("save");
-        let loaded: Doc = load_json(&path).expect("load");
+        let loaded: Doc = load_json(&path).expect("read").expect("load");
         assert_eq!(loaded, doc);
         let _ = fs::remove_file(&path);
     }
@@ -49,16 +54,15 @@ mod tests {
     #[test]
     fn load_missing_returns_none() {
         let path = std::env::temp_dir().join("nyx_test_missing_12345.json");
-        let loaded: Option<Doc> = load_json(&path);
+        let loaded: Option<Doc> = load_json(&path).expect("read");
         assert!(loaded.is_none());
     }
 
     #[test]
-    fn load_corrupt_returns_none() {
+    fn load_corrupt_returns_error() {
         let path = std::env::temp_dir().join(format!("nyx_test_corrupt_{}.json", std::process::id()));
         fs::write(&path, "{ не json").unwrap();
-        let loaded: Option<Doc> = load_json(&path);
-        assert!(loaded.is_none());
+        assert!(load_json::<Doc>(&path).is_err());
         let _ = fs::remove_file(&path);
     }
 }

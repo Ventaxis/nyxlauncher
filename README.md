@@ -44,7 +44,7 @@ NyxLauncher — это «Steam без магазина»: складываешь
 ui/                      React 19 + Vite (витрина, график, ачивки)
 src-tauri/
   src/lib.rs             окно, команды (get_summary, add_game, …), трекер процессов
-  src/engine.rs          чистый движок статистики и ачивок — 16 тестов
+  src/engine.rs          чистый движок статистики и ачивок — 19 тестов
   src/store.rs           атомарный JSON-стор (tmp + rename) — 3 теста
   achievements.json      ачивки как данные: условие = JSON, не код
 .github/workflows/       CI: cargo test + сборка exe и NSIS-инсталлера

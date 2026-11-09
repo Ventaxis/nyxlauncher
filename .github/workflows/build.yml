@@ -40,8 +40,9 @@ jobs:
       - name: Tests
         run: cargo test --manifest-path src-tauri/Cargo.toml
 
+      # фронтенд уже собран выше — гасим beforeBuildCommand, чтобы не собирать дважды
       - name: Build
-        run: npx tauri build
+        run: npx tauri build --config src-tauri/tauri.ci.conf.json
 
       - name: Upload raw exe
         uses: actions/upload-artifact@v4

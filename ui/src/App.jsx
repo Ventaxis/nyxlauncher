@@ -19,6 +19,11 @@ function errText(e) {
   return String(e);
 }
 
+// Версия приходит из package.json через define в vite.config.mjs.
+const APP_VERSION = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : 'dev';
+
+const BOOT_TIMEOUT_MS = 10000;
+
 export default function App() {
   const [summary, setSummary] = useState(null);
   const [stats, setStats] = useState(null);
@@ -26,6 +31,7 @@ export default function App() {
   const [selectedId, setSelectedId] = useState(null);
   const [query, setQuery] = useState('');
   const [status, setStatus] = useState(null); // { text, error }
+  const [loadError, setLoadError] = useState(null); // ядро не отдало библиотеку
   const [entered, setEntered] = useState(false); // stagger-вход только при первом появлении полки
   const statusTimer = useRef(null);
 
@@ -37,16 +43,35 @@ export default function App() {
 
   const refresh = useCallback(async () => {
     try {
-      setSummary(await getSummary());
+      const next = await getSummary();
+      setSummary(next);
+      setLoadError(null);
     } catch (e) {
-      showStatus(errText(e), true);
+      const text = errText(e);
+      setLoadError(text);
+      showStatus(text, true);
     }
   }, [showStatus]);
+
+  const retry = useCallback(() => {
+    setLoadError(null);
+    refresh();
+  }, [refresh]);
 
   useEffect(() => {
     refresh();
     return onLibraryChanged(refresh);
   }, [refresh]);
+
+  // Страховка от «вечной распаковки»: если ядро молчит дольше 10 секунд,
+  // показываем ошибку с кнопкой повтора вместо бесконечного «открываю архив…».
+  useEffect(() => {
+    if (summary || loadError) return undefined;
+    const t = setTimeout(() => {
+      setLoadError('Ядро не ответило за 10 секунд. Попробуйте запустить лаунчер ещё раз.');
+    }, BOOT_TIMEOUT_MS);
+    return () => clearTimeout(t);
+  }, [summary, loadError]);
 
   // Stagger-вход полки: классы снимаются, когда анимация гарантированно доиграла.
   useEffect(() => {
@@ -85,7 +110,13 @@ export default function App() {
   }, []);
 
   const handleAdd = useCallback(async () => {
-    const path = await openExeDialog();
+    let path;
+    try {
+      path = await openExeDialog();
+    } catch (e) {
+      showStatus(errText(e), true);
+      return;
+    }
     if (hasTauri && !path) return; // в ядре отмена диалога — тихий выход
     try {
       const game = await addGame(path);
@@ -136,7 +167,8 @@ export default function App() {
     if (q && view === 'detail') setView('shelf');
   }, [view]);
 
-  const playing = summary ? summary.games.find((g) => g.playing) || null : null;
+  const playingGames = summary ? summary.games.filter((g) => g.playing) : [];
+  const playing = playingGames[0] || null;
 
   return (
     <div className="app">
@@ -155,6 +187,8 @@ export default function App() {
             entered={entered}
             onOpen={openGame}
             onAdd={handleAdd}
+            error={loadError}
+            onRetry={retry}
           />
         ) : (
           <Detail
@@ -170,7 +204,7 @@ export default function App() {
 
       <footer className="statusbar">
         <span className="status-left mono">
-          NyxLauncher 0.2{hasTauri ? '' : ' · предпросмотр, демо-данные'}
+          NyxLauncher {APP_VERSION}{hasTauri ? '' : ' · предпросмотр, демо-данные'}
         </span>
         {status && (
           <span className={`status-msg${status.error ? ' is-error' : ''}`} role="status">
@@ -178,7 +212,13 @@ export default function App() {
           </span>
         )}
         <span className="status-flex" />
-        {playing && <StatusPlay key={playing.id} game={playing} />}
+        {playing && (
+          <StatusPlay
+            key={playing.id}
+            game={playing}
+            extra={playingGames.length - 1}
+          />
+        )}
       </footer>
     </div>
   );

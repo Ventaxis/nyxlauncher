@@ -15,6 +15,7 @@ export const hasTauri = Boolean(TAU && TAU.core && typeof TAU.core.invoke === 'f
  * @property {number} seconds_played
  * @property {string|null} last_played RFC3339
  * @property {boolean} playing
+ * @property {number|null} playing_since Unix-секунды начала текущей сессии
  */
 
 /**
@@ -96,13 +97,14 @@ export async function launchGame(id) {
 
 /** Диалог выбора exe. Без ядра возвращает null. @returns {Promise<string|null>} */
 export async function openExeDialog() {
-  if (hasTauri && TAU.dialog) {
-    return TAU.dialog.open({
-      multiple: false,
-      filters: [{ name: 'Игры', extensions: ['exe'] }],
-    });
+  if (!hasTauri) return null;
+  if (!TAU.dialog || typeof TAU.dialog.open !== 'function') {
+    throw new Error('Диалог выбора файла недоступен: плагин dialog не загружен');
   }
-  return null;
+  return TAU.dialog.open({
+    multiple: false,
+    filters: [{ name: 'Игры', extensions: ['exe'] }],
+  });
 }
 
 /**
@@ -117,6 +119,8 @@ export function onLibraryChanged(cb) {
     TAU.event.listen('library-changed', cb).then((fn) => {
       if (disposed) fn();
       else unlisten = fn;
+    }).catch((e) => {
+      console.error('nyx: не удалось подписаться на library-changed', e);
     });
     return () => {
       disposed = true;
@@ -165,6 +169,7 @@ function demoGame(id, name, seconds, last, playing, week, longest, sessions) {
     seconds_played: seconds,
     last_played: last,
     playing,
+    playing_since: playing ? Math.floor(Date.now() / 1000) - 754 : null,
     _week: week,
     _longest: longest,
     _sessions: sessions,
@@ -266,9 +271,15 @@ function demoLaunch(id) {
   const g = demo.games.find((x) => x.id === id);
   if (!g) throw new Error('Игра не найдена');
   const next = !g.playing;
-  for (const x of demo.games) x.playing = false;
+  for (const x of demo.games) {
+    x.playing = false;
+    x.playing_since = null;
+  }
   g.playing = next;
-  if (next) g.last_played = new Date().toISOString();
+  if (next) {
+    g.last_played = new Date().toISOString();
+    g.playing_since = Math.floor(Date.now() / 1000);
+  }
   emitDemo();
 }
 

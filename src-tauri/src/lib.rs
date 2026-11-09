@@ -2,10 +2,10 @@ mod engine;
 mod store;
 
 use chrono::Local;
-use engine::{AchievementDef, EvalContext, Session};
-use serde::{Deserialize, Serialize};
+use engine::{AchievementDef, Condition, EvalContext, Session};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
@@ -33,6 +33,8 @@ pub struct GameView {
     pub seconds_played: u64,
     pub last_played: Option<String>,
     pub playing: bool,
+    /// Unix-секунды начала текущей сессии (для таймера в статусбаре).
+    pub playing_since: Option<i64>,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -59,6 +61,11 @@ struct AchievementView {
     unlocked: bool,
     unlocked_at: Option<String>,
     progress: f64,
+    /// Текущее значение и порог уже в единицах отображения (часы/шт/дни).
+    progress_value: f64,
+    threshold: f64,
+    unit: String,
+    decimals: u8,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -103,10 +110,13 @@ impl From<&ActiveSession> for Session {
 }
 
 /// Глобальное состояние. ПРАВИЛО БЛОКИРОВОК: если нужно несколько мьютексов,
-/// захватывать строго в порядке games → sessions → active → unlocked,
+/// захватывать строго в порядке write_lock → games → sessions → active → unlocked,
 /// и никогда не захватывать уже удерживаемый повторно (std Mutex не реентерабелен).
-/// ЗАПИСЬ НА ДИСК — только после drop всех guard'ов: файл может писать десятки мс.
+/// ЗАПИСЬ НА ДИСК — после drop guard'ов состояния: файл может писать десятки мс.
+/// write_lock при этом удерживается на время снимка и записи, чтобы трекер
+/// не записал устаревший снимок поверх add_game/remove_game.
 struct AppState {
+    write_lock: Mutex<()>,
     games: Mutex<Vec<Game>>,
     sessions: Mutex<Vec<Session>>,
     active: Mutex<HashMap<String, ActiveSession>>,
@@ -159,6 +169,14 @@ fn achievement_views(
         .into_iter()
         .map(|o| {
             let def = defs.iter().find(|d| d.id == o.id);
+            let (progress_value, threshold, unit, decimals) = match def {
+                Some(d) => display_units(
+                    &d.condition,
+                    o.progress_value.unwrap_or(0.0),
+                    o.threshold.unwrap_or(0.0),
+                ),
+                None => (0.0, 0.0, String::new(), 0),
+            };
             AchievementView {
                 id: o.id.clone(),
                 title: def.map(|d| d.title.clone()).unwrap_or_default(),
@@ -167,9 +185,27 @@ fn achievement_views(
                 unlocked: o.unlocked || unlocked_map.contains_key(&o.id),
                 unlocked_at: unlocked_map.get(&o.id).cloned(),
                 progress: o.progress,
+                progress_value,
+                threshold,
+                unit,
+                decimals,
             }
         })
         .collect()
+}
+
+/// Перевод «сырых» значений условия в единицы, которые показывает интерфейс.
+fn display_units(cond: &Condition, value: f64, threshold: f64) -> (f64, f64, String, u8) {
+    match cond {
+        Condition::TotalSeconds { .. } | Condition::SessionSeconds { .. } => {
+            (value / 3600.0, threshold / 3600.0, "ч".into(), 1)
+        }
+        Condition::SessionCount { .. }
+        | Condition::GameCount { .. }
+        | Condition::DistinctGames { .. } => (value, threshold, "шт".into(), 0),
+        Condition::StreakDays { .. } => (value, threshold, "дн".into(), 0),
+        Condition::SessionStartHour { .. } => (value, threshold, String::new(), 0),
+    }
 }
 
 #[tauri::command]
@@ -208,6 +244,7 @@ fn get_summary(state: State<AppState>) -> Summary {
                 seconds_played: g.seconds_played + live,
                 last_played: g.last_played.clone(),
                 playing: active_snapshot.contains_key(&g.id),
+                playing_since: active_snapshot.get(&g.id).map(|(start, _)| *start),
             }
         })
         .collect();
@@ -229,7 +266,7 @@ fn get_summary(state: State<AppState>) -> Summary {
 
 #[tauri::command]
 fn get_game_stats(state: State<AppState>, id: String) -> Result<GameStats, String> {
-    let (mut mine, _active_open, last_played) = {
+    let (mine, _active_open, last_played) = {
         let games = state.games.lock().unwrap();
         let game = games.iter().find(|g| g.id == id).ok_or("Игра не найдена")?;
         let last_played = game.last_played.clone();
@@ -261,18 +298,26 @@ fn get_game_stats(state: State<AppState>, id: String) -> Result<GameStats, Strin
     })
 }
 
+fn write_games(state: &AppState, snapshot: &[Game]) -> Result<(), String> {
+    store::save_json(&state.data_dir.join("games.json"), snapshot)
+}
+
+fn write_sessions(state: &AppState, snapshot: &[Session]) -> Result<(), String> {
+    store::save_json(&state.data_dir.join("sessions.json"), snapshot)
+}
+
 /// Запись games.json: снимок под lock, запись после drop.
 fn persist_games(state: &AppState) {
     let snapshot = state.games.lock().unwrap().clone();
-    store::save_json(&state.data_dir.join("games.json"), &snapshot)
-        .map_err(|e| eprintln!("nyx store: {}", e))
-        .ok();
+    if let Err(e) = write_games(state, &snapshot) {
+        eprintln!("nyx store: {}", e);
+    }
 }
 
 fn persist_sessions(state: &AppState, snapshot: &[Session]) {
-    store::save_json(&state.data_dir.join("sessions.json"), &snapshot)
-        .map_err(|e| eprintln!("nyx store: {}", e))
-        .ok();
+    if let Err(e) = write_sessions(state, snapshot) {
+        eprintln!("nyx store: {}", e);
+    }
 }
 
 #[tauri::command]
@@ -280,12 +325,11 @@ fn add_game(state: State<AppState>, exe_path: String) -> Result<Game, String> {
     if !exe_path.to_lowercase().ends_with(".exe") {
         return Err("Это не exe-файл".into());
     }
+    let normalized = norm_path(&exe_path);
+    let _write = state.write_lock.lock().unwrap();
     let (game, snapshot) = {
         let mut games = state.games.lock().unwrap();
-        if games
-            .iter()
-            .any(|g| g.exe_path.eq_ignore_ascii_case(&exe_path))
-        {
+        if games.iter().any(|g| norm_path(&g.exe_path) == normalized) {
             return Err("Эта игра уже в библиотеке".into());
         }
         let name = std::path::Path::new(&exe_path)
@@ -303,13 +347,19 @@ fn add_game(state: State<AppState>, exe_path: String) -> Result<Game, String> {
         games.push(game.clone());
         (game, games.clone())
     };
-    store::save_json(&state.data_dir.join("games.json"), &snapshot)
-        .map_err(|e| format!("Не удалось сохранить библиотеку: {}", e))?;
+    if let Err(e) = write_games(&state, &snapshot) {
+        // Не оставляем игру только в памяти: иначе повторное добавление
+        // скажет «уже в библиотеке», а после перезапуска она исчезнет.
+        let mut games = state.games.lock().unwrap();
+        games.retain(|g| g.id != game.id);
+        return Err(format!("Не удалось сохранить библиотеку: {}", e));
+    }
     Ok(game)
 }
 
 #[tauri::command]
 fn remove_game(state: State<AppState>, id: String) -> Result<(), String> {
+    let _write = state.write_lock.lock().unwrap();
     let (games_snapshot, sessions_snapshot) = {
         let mut games = state.games.lock().unwrap();
         let len_before = games.len();
@@ -322,9 +372,12 @@ fn remove_game(state: State<AppState>, id: String) -> Result<(), String> {
         state.active.lock().unwrap().remove(&id);
         (games.clone(), sessions.clone())
     };
-    store::save_json(&state.data_dir.join("games.json"), &games_snapshot)
+    // Сессии пишем первыми: если вторая запись сорвётся, «призрачных» сессий
+    // удалённой игры не останется — игра просто вернётся с нулём часов.
+    write_sessions(&state, &sessions_snapshot)
+        .map_err(|e| format!("Не удалось сохранить сессии: {}", e))?;
+    write_games(&state, &games_snapshot)
         .map_err(|e| format!("Не удалось сохранить библиотеку: {}", e))?;
-    persist_sessions(&state, &sessions_snapshot);
     Ok(())
 }
 
@@ -335,6 +388,16 @@ fn launch_game(state: State<AppState>, id: String) -> Result<(), String> {
         let game = games.iter().find(|g| g.id == id).ok_or("Игра не найдена")?;
         game.exe_path.clone()
     };
+    // Игры часто ищут ресурсы/пишут конфиги относительно своей папки,
+    // поэтому рабочей директорией делаем каталог exe, а не каталог лаунчера.
+    let mut cmd = std::process::Command::new(&exe);
+    if let Some(dir) = Path::new(&exe).parent() {
+        cmd.current_dir(dir);
+    }
+    cmd.spawn()
+        .map_err(|e| format!("Не удалось запустить: {}", e))?;
+    // last_played фиксируем только после успешного запуска.
+    let _write = state.write_lock.lock().unwrap();
     {
         let mut games = state.games.lock().unwrap();
         if let Some(g) = games.iter_mut().find(|g| g.id == id) {
@@ -342,9 +405,6 @@ fn launch_game(state: State<AppState>, id: String) -> Result<(), String> {
         }
     }
     persist_games(&state);
-    std::process::Command::new(&exe)
-        .spawn()
-        .map_err(|e| format!("Не удалось запустить: {}", e))?;
     Ok(())
 }
 
@@ -373,7 +433,10 @@ fn spawn_tracker(app: AppHandle) {
             continue;
         }
 
-        let sys = sysinfo::System::new_all();
+        // Не тянем диски/сети/компоненты, как new_all(): для трекера нужны
+        // только процессы и их exe.
+        let mut sys = sysinfo::System::new();
+        sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
         let running: std::collections::HashSet<String> = sys
             .processes()
             .values()
@@ -416,21 +479,25 @@ fn spawn_tracker(app: AppHandle) {
             closed
         };
 
-        // 2) закрывшиеся сессии: games → sessions, запись после drop
+        // 2) закрывшиеся сессии: games → sessions, запись после drop.
+        // Если игру успели удалить, сессию не добавляем: иначе она останется
+        // «призраком» в статистике до перезапуска.
         if !closed.is_empty() {
+            let _write = state.write_lock.lock().unwrap();
             let sessions_snapshot = {
                 let mut games = state.games.lock().unwrap();
                 let mut sessions = state.sessions.lock().unwrap();
                 for a in &closed {
-                    sessions.push(Session::from(a));
                     if let Some(g) = games.iter_mut().find(|g| g.id == a.game_id) {
+                        sessions.push(Session::from(a));
                         g.seconds_played += a.seconds();
                     }
                 }
                 all_sessions_snapshot(&sessions, &state.active.lock().unwrap())
             };
+            // games.json здесь не пишем: часы восстанавливаются из sessions.json
+            // при старте, а запись из трекера могла бы затереть add/remove.
             persist_sessions(&state, &sessions_snapshot);
-            persist_games(&state);
         }
 
         // 3) ачивки: снимок под lock, расчёт и запись после drop
@@ -461,6 +528,7 @@ fn spawn_tracker(app: AppHandle) {
         // 4) снимок сессий с активными — чтобы закрытие окна не теряло часы;
         // дубликаты схлопываются при следующей загрузке (dedupe_sessions)
         {
+            let _write = state.write_lock.lock().unwrap();
             let sessions = state.sessions.lock().unwrap();
             let active = state.active.lock().unwrap();
             let snapshot = all_sessions_snapshot(&sessions, &active);
@@ -480,6 +548,7 @@ fn spawn_tracker(app: AppHandle) {
 /// При выходе приложения: закрытые окна терять нельзя — фиксируем активные сессии.
 fn commit_active_sessions(app: &AppHandle) {
     let state = app.state::<AppState>();
+    let _write = state.write_lock.lock().unwrap();
     let closed: Vec<ActiveSession> = {
         let mut active = state.active.lock().unwrap();
         let v: Vec<ActiveSession> = active.values().cloned().collect();
@@ -493,8 +562,8 @@ fn commit_active_sessions(app: &AppHandle) {
         let mut games = state.games.lock().unwrap();
         let mut sessions = state.sessions.lock().unwrap();
         for a in &closed {
-            sessions.push(Session::from(a));
             if let Some(g) = games.iter_mut().find(|g| g.id == a.game_id) {
+                sessions.push(Session::from(a));
                 g.seconds_played += a.seconds();
             }
         }
@@ -504,11 +573,42 @@ fn commit_active_sessions(app: &AppHandle) {
     persist_games(&state);
 }
 
+/// Загрузка с бэкапом: ошибка чтения не должна приводить к перезаписи
+/// исходного файла дефолтом. Битый/нечитаемый файл уводим в `*.json.bak`.
+/// Второй элемент — был ли файл реально прочитан (а не отсутствовал/битый):
+/// по нему setup решает, можно ли чистить осиротевшие сессии и пересчитывать часы.
+fn load_or_backup<T: DeserializeOwned>(path: &Path) -> (Option<T>, bool) {
+    match store::load_json(path) {
+        Ok(Some(value)) => (Some(value), true),
+        Ok(None) => (None, false),
+        Err(e) => {
+            eprintln!("nyx store: {}: {}", path.display(), e);
+            let backup = path.with_extension("json.bak");
+            if std::fs::rename(path, &backup).is_err() {
+                if let Err(copy_err) = std::fs::copy(path, &backup) {
+                    eprintln!(
+                        "nyx store: не удалось сохранить бэкап {}: {}",
+                        backup.display(),
+                        copy_err
+                    );
+                }
+            }
+            (None, false)
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_opener::init())
+        .invoke_handler(tauri::generate_handler![
+            get_summary,
+            get_game_stats,
+            add_game,
+            remove_game,
+            launch_game
+        ])
         .setup(|app| {
             let handle = app.handle().clone();
             let data_dir = handle
@@ -516,34 +616,49 @@ pub fn run() {
                 .app_data_dir()
                 .expect("не удалось найти папку данных");
 
-            let mut games: Vec<Game> =
-                store::load_json(&data_dir.join("games.json")).unwrap_or_default();
-            let mut sessions: Vec<Session> =
-                store::load_json(&data_dir.join("sessions.json")).unwrap_or_default();
+            let (games_loaded, games_present) = load_or_backup(&data_dir.join("games.json"));
+            let (sessions_loaded, sessions_present) = load_or_backup(&data_dir.join("sessions.json"));
+            let (unlocked_loaded, _unlocked_present) =
+                load_or_backup(&data_dir.join("achievements.json"));
+
+            let mut games: Vec<Game> = games_loaded.unwrap_or_default();
+            let mut sessions: Vec<Session> = sessions_loaded.unwrap_or_default();
             // активная сессия прошлой запуска могла попасть в файл снимком — схлопываем
             engine::dedupe_sessions(&mut sessions);
-            let unlocked: HashMap<String, String> =
-                store::load_json(&data_dir.join("achievements.json")).unwrap_or_default();
+            let unlocked: HashMap<String, String> = unlocked_loaded.unwrap_or_default();
             let defs: Vec<AchievementDef> =
                 serde_json::from_str(ACHIEVEMENTS_JSON).expect("битый achievements.json");
 
-            // секунды на витрине — истина из сессий
-            for g in games.iter_mut() {
-                g.seconds_played = engine::compute(
-                    &sessions
-                        .iter()
-                        .filter(|s| s.game_id == g.id)
-                        .cloned()
-                        .collect::<Vec<_>>(),
-                )
-                .total_seconds;
+            // Сессии удалённых игр не должны жить в статистике. Чистим только
+            // когда оба файла реально прочитаны: иначе «пустая библиотека»
+            // после сбоя чтения снесла бы все сессии.
+            if games_present && sessions_present {
+                sessions.retain(|s| games.iter().any(|g| g.id == s.game_id));
             }
-            let games_snapshot = games.clone();
-            store::save_json(&data_dir.join("games.json"), &games_snapshot)
-                .map_err(|e| eprintln!("nyx store: {}", e))
-                .ok();
+
+            // секунды на витрине — истина из сессий; без прочитанных сессий
+            // не обнуляем games.json
+            if sessions_present {
+                for g in games.iter_mut() {
+                    g.seconds_played = engine::compute(
+                        &sessions
+                            .iter()
+                            .filter(|s| s.game_id == g.id)
+                            .cloned()
+                            .collect::<Vec<_>>(),
+                    )
+                    .total_seconds;
+                }
+            }
+            if games_present && sessions_present {
+                let games_snapshot = games.clone();
+                store::save_json(&data_dir.join("games.json"), &games_snapshot)
+                    .map_err(|e| eprintln!("nyx store: {}", e))
+                    .ok();
+            }
 
             app.manage(AppState {
+                write_lock: Mutex::new(()),
                 games: Mutex::new(games),
                 sessions: Mutex::new(sessions),
                 active: Mutex::new(HashMap::new()),

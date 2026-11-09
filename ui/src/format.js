@@ -2,11 +2,6 @@
 
 const nf = new Intl.NumberFormat('ru-RU');
 
-/** @param {number} n */
-export function fmtNum(n) {
-  return nf.format(n);
-}
-
 /** Часы для сводок: целые, меньше часа — минуты. @param {number} seconds */
 export function fmtHours(seconds) {
   if (!Number.isFinite(seconds) || seconds <= 0) return '0 ч';

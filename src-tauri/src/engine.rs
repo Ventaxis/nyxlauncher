@@ -25,9 +25,9 @@ pub struct Stats {
     pub distinct_games: u64,
     /// Самая длинная серия подряд идущих дней с игрой.
     pub streak_days: u64,
-    /// Секунды по дням UTC (YYYY-MM-DD → секунды).
+    /// Секунды по дням (локальное время, YYYY-MM-DD → секунды).
     pub per_day: BTreeMap<String, u64>,
-    /// Сколько сессий началось в каждом часе UTC (0..24) — для оконных условий.
+    /// Сколько сессий началось в каждом локальном часе (0..24) — для оконных условий.
     pub start_hour_counts: [u64; 24],
 }
 
@@ -51,7 +51,8 @@ impl Default for Stats {
 pub enum Condition {
     TotalSeconds { seconds: u64 },
     SessionSeconds { seconds: u64 },
-    /// Старт сессии попадает в окно часов UTC [from, to); from > to — через полночь.
+    /// Старт сессии попадает в локальное окно часов [from, to);
+    /// from > to — через полночь, from == to — пустое окно.
     SessionStartHour { from: u32, to: u32 },
     GameCount { count: u32 },
     DistinctGames { count: u32 },
@@ -95,9 +96,11 @@ fn secs_between(start: i64, end: i64) -> u64 {
 }
 
 fn date_key(ts: i64) -> String {
+    // earliest() не теряет сессии в неоднозначный час перевода стрелок
+    // (single() там возвращает None).
     Local
         .timestamp_opt(ts, 0)
-        .single()
+        .earliest()
         .map(|dt| dt.format("%Y-%m-%d").to_string())
         .unwrap_or_default()
 }
@@ -112,7 +115,7 @@ pub fn compute(sessions: &[Session]) -> Stats {
         s.longest_session_seconds = s.longest_session_seconds.max(dur);
         distinct.insert(sess.game_id.clone());
         *s.per_day.entry(date_key(sess.start)).or_insert(0) += dur;
-        if let Some(dt) = Local.timestamp_opt(sess.start, 0).single() {
+        if let Some(dt) = Local.timestamp_opt(sess.start, 0).earliest() {
             s.start_hour_counts[dt.hour() as usize] += 1;
         }
     }
@@ -220,11 +223,16 @@ fn measure(cond: &Condition, stats: &Stats, ctx: &EvalContext) -> (bool, f64, f6
             *days as f64,
         ),
         Condition::SessionStartHour { from, to } => {
-            let (from, to) = (*from, *to);
+            // Конфиг приходит из JSON: не даём выйти за границы массива и
+            // трактуем from == to как пустое окно, а не как «любой час».
+            let from = (*from).min(24);
+            let to = (*to).min(24);
             let hit = if from < to {
                 (from..to).any(|h| stats.start_hour_counts[h as usize] > 0)
-            } else {
+            } else if from > to {
                 (0u32..24).any(|h| stats.start_hour_counts[h as usize] > 0 && (h >= from || h < to))
+            } else {
+                false
             };
             (hit, if hit { 1.0 } else { 0.0 }, 1.0)
         }
@@ -285,7 +293,7 @@ mod tests {
     }
 
     #[test]
-    fn per_day_uses_start_date_utc() {
+    fn per_day_uses_start_date_local() {
         let s = compute(&[
             sess("a", "2026-11-07 22:00:00", 1800),
             sess("a", "2026-11-08 23:30:00", 600),
@@ -451,5 +459,39 @@ mod tests {
             &ctx,
         );
         assert!(out[0].unlocked);
+    }
+
+    #[test]
+    fn empty_hour_window_never_unlocks() {
+        let stats = compute(&[sess("a", "2026-11-08 05:00:00", 600)]);
+        let ctx = EvalContext { game_count: 0 };
+        let out = evaluate(
+            &[def("exact", Condition::SessionStartHour { from: 5, to: 5 })],
+            &stats,
+            &ctx,
+        );
+        assert!(!out[0].unlocked);
+    }
+
+    #[test]
+    fn hour_window_clamps_instead_of_panicking() {
+        let stats = compute(&[
+            sess("a", "2026-11-08 23:00:00", 600),
+            sess("a", "2026-11-08 10:00:00", 600),
+        ]);
+        let ctx = EvalContext { game_count: 0 };
+        let late = evaluate(
+            &[def("late", Condition::SessionStartHour { from: 18, to: 26 })],
+            &stats,
+            &ctx,
+        );
+        assert!(late[0].unlocked, "23:00 попадает в 18..24");
+        let morning = compute(&[sess("a", "2026-11-08 10:00:00", 600)]);
+        let out = evaluate(
+            &[def("late", Condition::SessionStartHour { from: 18, to: 26 })],
+            &morning,
+            &ctx,
+        );
+        assert!(!out[0].unlocked, "10:00 не попадает в 18..24");
     }
 }
