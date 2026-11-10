@@ -86,11 +86,22 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         shell: pwsh
         run: |
-          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
-          $lines = Get-Content CHANGELOG.md
+          $version = (Get-Content package.json -Raw -Encoding UTF8 | ConvertFrom-Json).version
+          $lines = Get-Content CHANGELOG.md -Encoding UTF8
           $start = ($lines | Select-String -Pattern "^## \[$([regex]::Escape($version))\]" | Select-Object -First 1).LineNumber
           if (-not $start) { throw "В CHANGELOG.md нет раздела версии $version" }
-          $rest = $lines[$start..($lines.Count - 1)]
+
+          # Заголовок раздела в CHANGELOG: «## [0.4.0] — 2026-11-10».
+          $heading = $lines[$start - 1]
+          $date = if ($heading -match '(\d{4}-\d{2}-\d{2})') { $Matches[1] } else { '' }
+          $title = if ($date) { "## NyxLauncher $version — $date" } else { "## NyxLauncher $version" }
+
+          # Содержимое раздела: строки после заголовка, без ведущих пустых строк.
+          $rest = if ($start -lt $lines.Count) { $lines[$start..($lines.Count - 1)] } else { @() }
+          $first = 0
+          while ($first -lt $rest.Count -and [string]::IsNullOrWhiteSpace($rest[$first])) { $first++ }
+          $rest = if ($first -lt $rest.Count) { $rest[$first..($rest.Count - 1)] } else { @() }
+
           $next = ($rest | Select-String -Pattern '^## \[' | Select-Object -First 1).LineNumber
           $body = if ($next) { $rest[0..($next - 2)] } else { $rest }
           $header = @(
@@ -101,7 +112,7 @@ jobs:
             "Требования: Windows 10/11 x64. Установщик не подписан сертификатом — проверяйте хеш по ``SHA256SUMS.txt``."
             ""
           )
-          $text = ($header + $body) -join "`n"
+          $text = ($header + @($title, "") + $body) -join "`n"
           [System.IO.File]::WriteAllText("RELEASE_NOTES.md", $text, (New-Object System.Text.UTF8Encoding($false)))
 
       - name: Upload raw exe
