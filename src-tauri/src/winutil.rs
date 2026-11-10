@@ -345,9 +345,10 @@ mod icons {
         }
 
         // У старых иконок альфа-канала нет (все нули) — считаем их непрозрачными.
-        let has_alpha = buf.chunks_exact(4).any(|p| p[3] != 0);
+        let (chunks, _) = buf.as_chunks::<4>();
+        let has_alpha = chunks.iter().any(|p| p[3] != 0);
         let mut rgba = Vec::with_capacity(buf.len());
-        for px in buf.chunks_exact(4) {
+        for px in chunks {
             rgba.push(px[2]);
             rgba.push(px[1]);
             rgba.push(px[0]);

@@ -193,7 +193,10 @@ fn now_rfc3339() -> String {
 }
 
 /// Полный снимок сессий: закрытые + активные (активные как обычные строки).
-fn all_sessions_snapshot(sessions: &[Session], active: &HashMap<String, ActiveSession>) -> Vec<Session> {
+fn all_sessions_snapshot(
+    sessions: &[Session],
+    active: &HashMap<String, ActiveSession>,
+) -> Vec<Session> {
     let mut all = sessions.to_vec();
     for a in active.values() {
         all.push(a.snapshot());
@@ -285,7 +288,11 @@ fn write_sessions(state: &AppState, snapshot: &[Session]) -> Result<(), String> 
 
 fn write_unlocked(state: &AppState) -> Result<(), String> {
     let snapshot = state.unlocked.lock().unwrap().clone();
-    integrity::save_signed(&state.signer, &path_of(state, "achievements.json"), &snapshot)
+    integrity::save_signed(
+        &state.signer,
+        &path_of(state, "achievements.json"),
+        &snapshot,
+    )
 }
 
 fn write_settings(state: &AppState, value: &Settings) -> Result<(), String> {
@@ -607,14 +614,14 @@ fn split_args(s: &str) -> Vec<String> {
 }
 
 #[tauri::command]
-fn launch_game(
-    app: AppHandle,
-    state: State<AppState>,
-    id: String,
-) -> Result<(), String> {
+fn launch_game(app: AppHandle, state: State<AppState>, id: String) -> Result<(), String> {
     let (game, strict, minimize) = {
         let games = state.games.lock().unwrap();
-        let game = games.iter().find(|g| g.id == id).ok_or("Игра не найдена")?.clone();
+        let game = games
+            .iter()
+            .find(|g| g.id == id)
+            .ok_or("Игра не найдена")?
+            .clone();
         let s = state.settings.lock().unwrap();
         (game, s.strict_anticheat, s.minimize_on_launch)
     };
@@ -660,7 +667,11 @@ fn launch_game(
         .map_err(|e| format!("Не удалось запустить: {}", e))?;
 
     // Запоминаем PID: в строгом режиме считаем только этот процесс.
-    state.launched.lock().unwrap().insert(id.clone(), child.id());
+    state
+        .launched
+        .lock()
+        .unwrap()
+        .insert(id.clone(), child.id());
 
     // last_played фиксируем только после успешного запуска.
     {
@@ -767,7 +778,10 @@ fn safe_id(id: &str) -> String {
 }
 
 fn icon_path(state: &AppState, id: &str) -> PathBuf {
-    state.data_dir.join("icons").join(format!("{}.png", safe_id(id)))
+    state
+        .data_dir
+        .join("icons")
+        .join(format!("{}.png", safe_id(id)))
 }
 
 /// Иконки exe в виде data:URL. Извлекаются один раз и кешируются на диске.
@@ -870,7 +884,7 @@ fn get_sessions(state: State<AppState>, id: String) -> Result<Vec<SessionView>, 
         }
         v
     };
-    out.sort_by(|a, b| b.start.cmp(&a.start));
+    out.sort_by_key(|a| std::cmp::Reverse(a.start));
     Ok(out)
 }
 
@@ -1075,7 +1089,8 @@ fn export_data(state: State<AppState>, path: String) -> Result<String, String> {
 
 #[tauri::command]
 fn import_data(app: AppHandle, state: State<AppState>, path: String) -> Result<String, String> {
-    let text = std::fs::read_to_string(&path).map_err(|e| format!("Не удалось прочитать файл: {}", e))?;
+    let text =
+        std::fs::read_to_string(&path).map_err(|e| format!("Не удалось прочитать файл: {}", e))?;
     let value: Value =
         serde_json::from_str(&text).map_err(|e| format!("Это не файл резервной копии: {}", e))?;
     let bundle: DataBundle = state.signer.unwrap(&value).map_err(|e| {
@@ -1267,7 +1282,7 @@ fn spawn_tracker(app: AppHandle) {
                 if let Some(pids) = pids {
                     if strict {
                         // Только процесс, запущенный лаунчером, и только с окном.
-                        ok = launched_pid.map_or(false, |pid| pids.contains(&pid));
+                        ok = launched_pid.is_some_and(|pid| pids.contains(&pid));
                     } else if !direct {
                         ok = launched_pid.is_some();
                     }
@@ -1283,7 +1298,9 @@ fn spawn_tracker(app: AppHandle) {
                 for (id, ok) in &states {
                     if *ok {
                         any_playing = true;
-                        if let std::collections::hash_map::Entry::Vacant(e) = active.entry(id.clone()) {
+                        if let std::collections::hash_map::Entry::Vacant(e) =
+                            active.entry(id.clone())
+                        {
                             e.insert(ActiveSession::new(id, ts));
                             changed = true;
                         }
@@ -1405,7 +1422,12 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
     use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 
-    let paused = app.state::<AppState>().settings.lock().unwrap().tracker_paused;
+    let paused = app
+        .state::<AppState>()
+        .settings
+        .lock()
+        .unwrap()
+        .tracker_paused;
     let open = MenuItem::with_id(app, "open", "Открыть NyxLauncher", true, None::<&str>)?;
     let pause = CheckMenuItem::with_id(
         app,
@@ -1565,11 +1587,8 @@ pub fn run() {
 
             let (games_loaded, games_present) =
                 load_file::<Vec<Game>>(&signer, &data_dir.join("games.json"), &mut tampered);
-            let (sessions_loaded, sessions_present) = load_file::<Vec<Session>>(
-                &signer,
-                &data_dir.join("sessions.json"),
-                &mut tampered,
-            );
+            let (sessions_loaded, sessions_present) =
+                load_file::<Vec<Session>>(&signer, &data_dir.join("sessions.json"), &mut tampered);
             let (unlocked_loaded, _) = load_file::<HashMap<String, String>>(
                 &signer,
                 &data_dir.join("achievements.json"),
@@ -1577,7 +1596,8 @@ pub fn run() {
             );
             let (settings_loaded, _) =
                 load_file::<Settings>(&signer, &data_dir.join("settings.json"), &mut tampered);
-            let (meta_loaded, _) = load_file::<Meta>(&signer, &data_dir.join("meta.json"), &mut tampered);
+            let (meta_loaded, _) =
+                load_file::<Meta>(&signer, &data_dir.join("meta.json"), &mut tampered);
 
             let mut games: Vec<Game> = games_loaded.unwrap_or_default();
             let mut sessions: Vec<Session> = sessions_loaded.unwrap_or_default();
@@ -1653,8 +1673,8 @@ pub fn run() {
             spawn_tracker(handle.clone());
 
             // Окно создаётся скрытым (без мигания), показываем, если не просили старт в трее.
-            let minimized = settings.start_minimized
-                || std::env::args().any(|a| a == "--minimized");
+            let minimized =
+                settings.start_minimized || std::env::args().any(|a| a == "--minimized");
             if let Some(w) = app.get_webview_window("main") {
                 if !minimized {
                     let _ = w.show();

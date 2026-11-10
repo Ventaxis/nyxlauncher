@@ -27,11 +27,26 @@
   "bundle": {
     "active": true,
     "targets": ["nsis"],
+    "publisher": "Ventaxis Corp",
+    "copyright": "© 2026 Ventaxis Corp. Все права защищены.",
+    "category": "Game",
+    "homepage": "https://github.com/Ventaxis/nyxlauncher",
+    "shortDescription": "Библиотека игр, учёт времени и достижения — локально, без сети",
+    "longDescription": "NyxLauncher собирает установленные игры в одну библиотеку, считает игровое время, ведёт историю сессий и выдаёт достижения. Работает локально: без учётной записи, магазина и телеметрии.",
+    "license": "LicenseRef-Proprietary",
+    "licenseFile": "../LICENSE",
     "icon": [
       "icons/icon.ico",
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/128x128@2x.png"
-    ]
+    ],
+    "windows": {
+      "nsis": {
+        "installerIcon": "icons/icon.ico",
+        "languages": ["Russian"],
+        "displayLanguageSelector": false
+      }
+    }
   }
 }

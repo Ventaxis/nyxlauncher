@@ -23,7 +23,7 @@ pub struct Session {
 }
 
 /// Аггрегированная статистика по всем сессиям.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
 pub struct Stats {
     pub total_seconds: u64,
     pub sessions_count: u64,
@@ -38,33 +38,34 @@ pub struct Stats {
     pub start_hour_counts: [u64; 24],
 }
 
-impl Default for Stats {
-    fn default() -> Self {
-        Self {
-            total_seconds: 0,
-            sessions_count: 0,
-            longest_session_seconds: 0,
-            distinct_games: 0,
-            streak_days: 0,
-            per_day: BTreeMap::new(),
-            start_hour_counts: [0; 24],
-        }
-    }
-}
-
 /// Условие ачивки — данные, не код (правила расширяются JSON-ом без перекомпиляции).
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Condition {
-    TotalSeconds { seconds: u64 },
-    SessionSeconds { seconds: u64 },
+    TotalSeconds {
+        seconds: u64,
+    },
+    SessionSeconds {
+        seconds: u64,
+    },
     /// Старт сессии попадает в локальное окно часов [from, to);
     /// from > to — через полночь, from == to — пустое окно.
-    SessionStartHour { from: u32, to: u32 },
-    GameCount { count: u32 },
-    DistinctGames { count: u32 },
-    StreakDays { days: u32 },
-    SessionCount { count: u32 },
+    SessionStartHour {
+        from: u32,
+        to: u32,
+    },
+    GameCount {
+        count: u32,
+    },
+    DistinctGames {
+        count: u32,
+    },
+    StreakDays {
+        days: u32,
+    },
+    SessionCount {
+        count: u32,
+    },
 }
 
 /// Определение ачивки (из achievements.json).
@@ -223,7 +224,11 @@ fn measure(cond: &Condition, stats: &Stats, ctx: &EvalContext) -> (bool, f64, f6
             stats.distinct_games as f64,
             *count as f64,
         ),
-        Condition::GameCount { count } => (ctx.game_count >= *count, ctx.game_count as f64, *count as f64),
+        Condition::GameCount { count } => (
+            ctx.game_count >= *count,
+            ctx.game_count as f64,
+            *count as f64,
+        ),
         Condition::StreakDays { days } => (
             stats.streak_days >= *days as u64,
             stats.streak_days as f64,
@@ -277,7 +282,9 @@ mod tests {
         ];
         dedupe_sessions(&mut v);
         assert_eq!(v.len(), 3);
-        let merged = v.iter().find(|s| s.game_id == "a" && s.end - s.start == 300);
+        let merged = v
+            .iter()
+            .find(|s| s.game_id == "a" && s.end - s.start == 300);
         assert!(merged.is_some(), "должен остаться самый длинный вариант");
     }
 
@@ -373,7 +380,11 @@ mod tests {
     fn total_seconds_threshold_progress_halfway() {
         let stats = compute(&[sess("a", "2026-11-08 10:00:00", 1800)]);
         let ctx = EvalContext { game_count: 0 };
-        let out = evaluate(&[def("h1", Condition::TotalSeconds { seconds: 3600 })], &stats, &ctx);
+        let out = evaluate(
+            &[def("h1", Condition::TotalSeconds { seconds: 3600 })],
+            &stats,
+            &ctx,
+        );
         assert!(!out[0].unlocked);
         assert!((out[0].progress - 0.5).abs() < 1e-9);
         assert_eq!(out[0].progress_value, Some(1800.0));
@@ -384,7 +395,11 @@ mod tests {
     fn progress_clamps_at_one() {
         let stats = compute(&[sess("a", "2026-11-08 10:00:00", 7200)]);
         let ctx = EvalContext { game_count: 0 };
-        let out = evaluate(&[def("h1", Condition::TotalSeconds { seconds: 3600 })], &stats, &ctx);
+        let out = evaluate(
+            &[def("h1", Condition::TotalSeconds { seconds: 3600 })],
+            &stats,
+            &ctx,
+        );
         assert!(out[0].unlocked);
         assert_eq!(out[0].progress, 1.0);
     }
@@ -396,7 +411,11 @@ mod tests {
             sess("a", "2026-11-08 14:00:00", 7200),
         ]);
         let ctx = EvalContext { game_count: 0 };
-        let out = evaluate(&[def("m", Condition::SessionSeconds { seconds: 3600 })], &stats, &ctx);
+        let out = evaluate(
+            &[def("m", Condition::SessionSeconds { seconds: 3600 })],
+            &stats,
+            &ctx,
+        );
         assert!(out[0].unlocked);
     }
 
@@ -404,7 +423,11 @@ mod tests {
     fn game_count_uses_library_not_sessions() {
         let stats = Stats::default();
         let ctx = EvalContext { game_count: 5 };
-        let out = evaluate(&[def("collector", Condition::GameCount { count: 5 })], &stats, &ctx);
+        let out = evaluate(
+            &[def("collector", Condition::GameCount { count: 5 })],
+            &stats,
+            &ctx,
+        );
         assert!(out[0].unlocked);
     }
 
@@ -415,7 +438,11 @@ mod tests {
             sess("b", "2026-11-08 11:00:00", 60),
         ]);
         let ctx = EvalContext { game_count: 0 };
-        let out = evaluate(&[def("d", Condition::DistinctGames { count: 3 })], &stats, &ctx);
+        let out = evaluate(
+            &[def("d", Condition::DistinctGames { count: 3 })],
+            &stats,
+            &ctx,
+        );
         assert!(!out[0].unlocked);
         assert!((out[0].progress - 2.0 / 3.0).abs() < 1e-9);
     }
@@ -463,7 +490,10 @@ mod tests {
         let stats = compute(&[sess("a", "2026-11-08 23:00:00", 600)]);
         let ctx = EvalContext { game_count: 0 };
         let out = evaluate(
-            &[def("evening", Condition::SessionStartHour { from: 22, to: 6 })],
+            &[def(
+                "evening",
+                Condition::SessionStartHour { from: 22, to: 6 },
+            )],
             &stats,
             &ctx,
         );
@@ -490,14 +520,20 @@ mod tests {
         ]);
         let ctx = EvalContext { game_count: 0 };
         let late = evaluate(
-            &[def("late", Condition::SessionStartHour { from: 18, to: 26 })],
+            &[def(
+                "late",
+                Condition::SessionStartHour { from: 18, to: 26 },
+            )],
             &stats,
             &ctx,
         );
         assert!(late[0].unlocked, "23:00 попадает в 18..24");
         let morning = compute(&[sess("a", "2026-11-08 10:00:00", 600)]);
         let out = evaluate(
-            &[def("late", Condition::SessionStartHour { from: 18, to: 26 })],
+            &[def(
+                "late",
+                Condition::SessionStartHour { from: 18, to: 26 },
+            )],
             &morning,
             &ctx,
         );

@@ -1,0 +1,56 @@
+name: Предложение
+description: Предложить функцию или улучшение
+title: "[feature] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Перед предложением проверьте, что подобная задача ещё не обсуждалась.
+        Помните: в проекте нет «декоративных» настроек — каждая опция обязана
+        менять реальное поведение.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Задача
+      description: Какую проблему решает предложение
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: Предлагаемое решение
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Альтернативы
+      description: Какие ещё варианты рассматривались
+    validations:
+      required: false
+  - type: dropdown
+    id: area
+    attributes:
+      label: Область
+      options:
+        - Учёт времени
+        - Библиотека и запуск
+        - История сессий
+        - Достижения
+        - Настройки
+        - Трей и автозапуск
+        - Интерфейс и темы
+        - Данные и подпись
+        - Другое
+    validations:
+      required: true
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Соответствие проекту
+      options:
+        - label: Функция работает локально и не требует сети
+          required: true
+        - label: Функция не является античит-системой и не обходит защиты игр
+          required: true

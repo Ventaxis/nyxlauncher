@@ -1,0 +1,82 @@
+name: Ошибка
+description: Сообщить о воспроизводимой проблеме в NyxLauncher
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Спасибо за отчёт. Не публикуйте здесь сведения об уязвимостях —
+        для них есть приватный канал в разделе Security.
+  - type: input
+    id: version
+    attributes:
+      label: Версия NyxLauncher
+      description: Указана в статусбаре окна или в имени установщика
+      placeholder: 0.4.0
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Версия Windows
+      placeholder: Windows 11 23H2, x64
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: Что произошло
+      description: Опишите наблюдаемое поведение
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Шаги воспроизведения
+      placeholder: |
+        1. Открыть настройки
+        2. Включить строгий режим
+        3. Запустить игру
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Ожидаемое поведение
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Область
+      options:
+        - Учёт времени
+        - Библиотека и запуск
+        - История сессий
+        - Достижения
+        - Настройки
+        - Трей и автозапуск
+        - Интерфейс и темы
+        - Данные и подпись
+        - Другое
+    validations:
+      required: true
+  - type: textarea
+    id: extra
+    attributes:
+      label: Дополнительно
+      description: |
+        Скриншоты, содержимое `%APPDATA%\corp.ventaxis.nyxlauncher`,
+        наличие файлов `*.tampered.bak`. Не прикладывайте личные данные.
+    validations:
+      required: false
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Проверки
+      options:
+        - label: Проблема воспроизводится на последней версии
+          required: true
+        - label: Это не вопрос безопасности
+          required: true

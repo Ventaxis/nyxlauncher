@@ -8,6 +8,10 @@ on:
     branches: [main]
   workflow_dispatch:
 
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: windows-latest
@@ -22,44 +26,115 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: npm
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
 
-      - name: Install Tauri CLI
+      - name: Install dependencies
         run: npm ci
 
       - name: Build frontend
         run: npm run build
 
+      - name: Formatting
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
+
+      - name: Lints
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+
       - name: Tests
         run: cargo test --manifest-path src-tauri/Cargo.toml
+
+      - name: Version matches tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $tag = "${{ github.ref_name }}"
+          if ($tag -ne "v$version") {
+            throw "Тег $tag не совпадает с версией package.json ($version)"
+          }
+          Write-Host "Версия $version подтверждена"
 
       # фронтенд уже собран выше — гасим beforeBuildCommand, чтобы не собирать дважды
       - name: Build
         run: npx tauri build --config src-tauri/tauri.ci.conf.json
+
+      - name: Checksums
+        shell: pwsh
+        run: |
+          $root = 'src-tauri/target/release'
+          $files = @("$root/nyxlauncher.exe") + (Get-ChildItem "$root/bundle/nsis/*.exe" | ForEach-Object { $_.FullName })
+          $lines = foreach ($f in $files) {
+            $hash = (Get-FileHash $f -Algorithm SHA256).Hash.ToLower()
+            $name = Split-Path $f -Leaf
+            "$hash  $name"
+          }
+          $text = ($lines -join "`n") + "`n"
+          [System.IO.File]::WriteAllText("$root/SHA256SUMS.txt", $text, (New-Object System.Text.UTF8Encoding($false)))
+          Get-Content "$root/SHA256SUMS.txt"
+
+      - name: Release notes
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $lines = Get-Content CHANGELOG.md
+          $start = ($lines | Select-String -Pattern "^## \[$([regex]::Escape($version))\]" | Select-Object -First 1).LineNumber
+          if (-not $start) { throw "В CHANGELOG.md нет раздела версии $version" }
+          $rest = $lines[$start..($lines.Count - 1)]
+          $next = ($rest | Select-String -Pattern '^## \[' | Select-Object -First 1).LineNumber
+          $body = if ($next) { $rest[0..($next - 2)] } else { $rest }
+          $header = @(
+            "**Установщик:** ``NyxLauncher_${version}_x64-setup.exe``  "
+            "**Переносная версия:** ``nyxlauncher.exe``  "
+            "**Контрольные суммы:** ``SHA256SUMS.txt``"
+            ""
+            "Требования: Windows 10/11 x64. Установщик не подписан сертификатом — проверяйте хеш по ``SHA256SUMS.txt``."
+            ""
+          )
+          $text = ($header + $body) -join "`n"
+          [System.IO.File]::WriteAllText("RELEASE_NOTES.md", $text, (New-Object System.Text.UTF8Encoding($false)))
 
       - name: Upload raw exe
         uses: actions/upload-artifact@v4
         with:
           name: NyxLauncher-windows-exe
           path: src-tauri/target/release/nyxlauncher.exe
+          if-no-files-found: error
 
       - name: Upload installer
         uses: actions/upload-artifact@v4
         with:
           name: NyxLauncher-windows-installer
           path: src-tauri/target/release/bundle/nsis/*.exe
+          if-no-files-found: error
 
-      - name: Release (only on v* tags)
+      - name: Upload checksums
+        uses: actions/upload-artifact@v4
+        with:
+          name: NyxLauncher-checksums
+          path: src-tauri/target/release/SHA256SUMS.txt
+          if-no-files-found: error
+
+      - name: Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
+          name: NyxLauncher ${{ github.ref_name }}
+          body_path: RELEASE_NOTES.md
+          draft: false
+          prerelease: false
+          fail_on_unmatched_files: true
           files: |
             src-tauri/target/release/bundle/nsis/*.exe
             src-tauri/target/release/nyxlauncher.exe
+            src-tauri/target/release/SHA256SUMS.txt

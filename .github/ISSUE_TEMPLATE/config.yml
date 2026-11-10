@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Уязвимость или проблема безопасности
+    url: https://github.com/Ventaxis/nyxlauncher/security/advisories/new
+    about: Приватный канал для сообщений об уязвимостях. Не создавайте публичный issue.
+  - name: Вопрос по установке и работе
+    url: https://github.com/Ventaxis/nyxlauncher/blob/main/README.md
+    about: Разделы «Установка», «Первый запуск» и «Совместимость» в README.

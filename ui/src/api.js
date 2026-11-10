@@ -335,16 +335,32 @@ function week7(vals) {
   return vals.map((seconds, i) => ({ date: dateStr(6 - i), seconds }));
 }
 
+// Псевдохеш для демо-библиотеки: стабильный, 64 hex-символа, как SHA-256.
+function demoHash(name) {
+  let acc = 0x811c9dc5;
+  for (let i = 0; i < name.length; i += 1) {
+    acc = (acc ^ name.charCodeAt(i)) >>> 0;
+    acc = Math.imul(acc, 0x01000193) >>> 0;
+  }
+  let out = '';
+  for (let i = 0; i < 64; i += 1) {
+    acc = Math.imul(acc ^ i, 0x01000193) >>> 0;
+    out += '0123456789abcdef'[(acc >>> 24) & 0xf];
+  }
+  return out;
+}
+
 function demoGame(id, name, seconds, last, playing, week, longest, sessions) {
+  const folder = name.replace(/[^\p{L}\p{N}]+/gu, '');
   return {
     id,
     name,
-    exe_path: `C:\\Games\\${name}\\game.exe`,
+    exe_path: `D:\\Games\\${name}\\${folder}.exe`,
     seconds_played: seconds,
     last_played: last,
     args: '',
     work_dir: null,
-    exe_hash: 'demo',
+    exe_hash: demoHash(name),
     added_at: Math.floor(new Date(isoAt(20, 12, 0)).getTime() / 1000),
     playing,
     playing_since: playing ? Math.floor(Date.now() / 1000) - 754 : null,
@@ -480,7 +496,7 @@ function demoUpdate({ id, name, args, workDir }) {
 function demoRefresh(id) {
   const g = demo.games.find((x) => x.id === id);
   if (!g) throw new Error('Игра не найдена');
-  g.exe_hash = `demo-${Date.now()}`;
+  g.exe_hash = demoHash(`${g.name}:${Date.now()}`);
   emitDemo();
   const { _week, _longest, _sessions, ...view } = g;
   return { ...view };

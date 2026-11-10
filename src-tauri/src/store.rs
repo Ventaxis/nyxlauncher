@@ -25,7 +25,9 @@ pub fn load_json<T: DeserializeOwned>(path: &Path) -> Result<Option<T>, String> 
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(e.to_string()),
     };
-    serde_json::from_str(&text).map(Some).map_err(|e| e.to_string())
+    serde_json::from_str(&text)
+        .map(Some)
+        .map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -61,7 +63,8 @@ mod tests {
 
     #[test]
     fn load_corrupt_returns_error() {
-        let path = std::env::temp_dir().join(format!("nyx_test_corrupt_{}.json", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("nyx_test_corrupt_{}.json", std::process::id()));
         fs::write(&path, "{ не json").unwrap();
         assert!(load_json::<Doc>(&path).is_err());
         let _ = fs::remove_file(&path);
