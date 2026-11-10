@@ -1,6 +1,6 @@
 [package]
 name = "nyxlauncher"
-version = "0.3.0"
+version = "0.4.0"
 description = "NyxLauncher — игровой хаб от Ventaxis Corp"
 edition = "2021"
 
@@ -12,9 +12,29 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sysinfo = "0.33"
 chrono = "0.4"
+# Подпись данных (tamper-evident JSON) и криптостойкий секрет.
+hmac = "0.12"
+sha2 = "0.10"
+getrandom = "0.3"
+base64 = "0.22"
+# Иконки exe → PNG.
+png = "0.17"
+# Автозапуск через HKCU\...\Run — без сторонних сервисов.
+winreg = "0.56"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Com",
+    "Win32_UI_Controls",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }

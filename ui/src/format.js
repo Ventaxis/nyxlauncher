@@ -66,6 +66,31 @@ export function fmtShortDate(iso) {
   return d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
 }
 
+/** Дата и время сессии из Unix-секунд: «5 нояб, 21:30». @param {number} ts */
+export function fmtDateTime(ts) {
+  const d = new Date(ts * 1000);
+  if (Number.isNaN(d.getTime())) return '—';
+  const date = d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
+  const time = d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+  return `${date}, ${time}`;
+}
+
+/** Длительность сессии: «1 ч 24 мин» / «37 мин». @param {number} seconds */
+export function fmtDuration(seconds) {
+  const s = Math.max(0, Math.floor(seconds || 0));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  if (h > 0) return `${h} ч ${pad2(m)} мин`;
+  return `${Math.max(1, m)} мин`;
+}
+
+/** Значение для <input type="datetime-local"> из Unix-секунд. @param {number} ts */
+export function toLocalInputValue(ts) {
+  const d = new Date(ts * 1000);
+  if (Number.isNaN(d.getTime())) return '';
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}T${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+}
+
 const WEEKDAYS = ['вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб'];
 
 /** @param {string} dateStr 'YYYY-MM-DD' */

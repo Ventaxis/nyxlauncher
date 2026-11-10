@@ -18,6 +18,7 @@ pub fn save_json<T: Serialize + ?Sized>(path: &Path, value: &T) -> Result<(), St
 
 /// Загрузка: нет файла — Ok(None); ошибка чтения или битый JSON — Err,
 /// чтобы вызывающий мог сохранить исходный файл, а не затереть его дефолтом.
+#[allow(dead_code)] // используется тестами и остаётся общим helper'ом хранилища
 pub fn load_json<T: DeserializeOwned>(path: &Path) -> Result<Option<T>, String> {
     let text = match fs::read_to_string(path) {
         Ok(text) => text,

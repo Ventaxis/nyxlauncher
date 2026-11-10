@@ -14,6 +14,10 @@ export const hasTauri = Boolean(TAU && TAU.core && typeof TAU.core.invoke === 'f
  * @property {string} exe_path
  * @property {number} seconds_played
  * @property {string|null} last_played RFC3339
+ * @property {string} args
+ * @property {string|null} work_dir
+ * @property {string|null} exe_hash
+ * @property {number} added_at Unix-секунды
  * @property {boolean} playing
  * @property {number|null} playing_since Unix-секунды начала текущей сессии
  */
@@ -49,6 +53,8 @@ export const hasTauri = Boolean(TAU && TAU.core && typeof TAU.core.invoke === 'f
  * @property {Game[]} games
  * @property {Totals} totals
  * @property {Achievement[]} achievements
+ * @property {boolean} tracker_paused
+ * @property {string[]} warnings
  */
 
 /**
@@ -59,6 +65,47 @@ export const hasTauri = Boolean(TAU && TAU.core && typeof TAU.core.invoke === 'f
  * @property {string|null} last_played
  * @property {number} sessions_count
  * @property {WeekDay[]} week 7 дней, старые → сегодня
+ */
+
+/**
+ * @typedef {Object} Settings
+ * @property {boolean} autostart
+ * @property {boolean} start_minimized
+ * @property {boolean} close_to_tray
+ * @property {boolean} minimize_to_tray
+ * @property {boolean} minimize_on_launch
+ * @property {boolean} show_icons
+ * @property {string} theme graphite | midnight | oled
+ * @property {boolean} reduce_motion
+ * @property {string} sort_mode recent | name | hours | added
+ * @property {boolean} tracker_paused
+ * @property {number} min_session_secs
+ * @property {boolean} require_window
+ * @property {boolean} strict_anticheat
+ * @property {boolean} count_direct_launch
+ * @property {number} poll_secs
+ */
+
+/**
+ * @typedef {Object} SettingsView
+ * @property {Settings} settings
+ * @property {boolean} autostart_enabled
+ * @property {string} data_dir
+ * @property {string} version
+ * @property {string} install_id
+ * @property {string[]} tampered
+ * @property {boolean} clock_rollback
+ */
+
+/**
+ * @typedef {Object} Session
+ * @property {string} id
+ * @property {string} game_id
+ * @property {number} start Unix-секунды
+ * @property {number} end Unix-секунды
+ * @property {number} seconds
+ * @property {boolean} manual
+ * @property {boolean} active
  */
 
 function core() {
@@ -95,6 +142,82 @@ export async function launchGame(id) {
   return demoLaunch(id);
 }
 
+/**
+ * Название, аргументы и рабочая папка.
+ * @param {{id: string, name: string, args: string, workDir: string}} p
+ * @returns {Promise<Game>}
+ */
+export async function updateGame({ id, name, args, workDir }) {
+  if (hasTauri) return core().invoke('update_game', { id, name, args, workDir });
+  return demoUpdate({ id, name, args, workDir });
+}
+
+/** Перепроверить exe и хеш (после обновления игры). @returns {Promise<Game>} */
+export async function refreshExe(id) {
+  if (hasTauri) return core().invoke('refresh_exe', { id });
+  return demoRefresh(id);
+}
+
+/** @returns {Promise<SettingsView>} */
+export async function getSettings() {
+  if (hasTauri) return core().invoke('get_settings');
+  return demoSettingsView();
+}
+
+/** @param {Settings} next @returns {Promise<SettingsView>} */
+export async function setSettings(next) {
+  if (hasTauri) return core().invoke('set_settings', { next });
+  return demoSaveSettings(next);
+}
+
+/** Иконки exe: id → data:URL. @returns {Promise<Record<string,string>>} */
+export async function getIcons() {
+  if (hasTauri) return core().invoke('get_icons');
+  return {};
+}
+
+/** @returns {Promise<Session[]>} */
+export async function getSessions(id) {
+  if (hasTauri) return core().invoke('get_sessions', { id });
+  return demoSessionsFor(id).map((s) => ({ ...s }));
+}
+
+/** @param {{id: string, start: string, minutes: number}} p @returns {Promise<Session>} */
+export async function addManualSession({ id, start, minutes }) {
+  if (hasTauri) return core().invoke('add_manual_session', { id, start, minutes });
+  return demoAddSession({ id, start, minutes });
+}
+
+/** @returns {Promise<void>} */
+export async function deleteSession(id) {
+  if (hasTauri) return core().invoke('delete_session', { id });
+  demoDeleteSession(id);
+}
+
+/** Сброс статистики одной игры (id) или всей библиотеки (null). @returns {Promise<void>} */
+export async function resetStats(id = null) {
+  if (hasTauri) return core().invoke('reset_stats', { id });
+  demoResetStats(id);
+}
+
+/** @returns {Promise<string>} */
+export async function exportData(path) {
+  if (hasTauri) return core().invoke('export_data', { path });
+  return path;
+}
+
+/** @returns {Promise<string>} */
+export async function importData(path) {
+  if (hasTauri) return core().invoke('import_data', { path });
+  throw new Error('Импорт доступен только в приложении: подпись привязана к установке.');
+}
+
+/** @returns {Promise<void>} */
+export async function openDataDir() {
+  if (hasTauri) return core().invoke('open_data_dir');
+  throw new Error('Папка данных доступна только в приложении.');
+}
+
 /** Диалог выбора exe. Без ядра возвращает null. @returns {Promise<string|null>} */
 export async function openExeDialog() {
   if (!hasTauri) return null;
@@ -107,37 +230,88 @@ export async function openExeDialog() {
   });
 }
 
+/** Куда сохранить резервную копию. @returns {Promise<string|null>} */
+export async function saveBackupDialog() {
+  if (!hasTauri) return 'C:\\Users\\demo\\nyx-backup.json';
+  if (!TAU.dialog || typeof TAU.dialog.save !== 'function') {
+    throw new Error('Диалог сохранения недоступен: плагин dialog не загружен');
+  }
+  const stamp = new Date().toISOString().slice(0, 10);
+  return TAU.dialog.save({
+    defaultPath: `nyx-backup-${stamp}.json`,
+    filters: [{ name: 'Резервная копия NyxLauncher', extensions: ['json'] }],
+  });
+}
+
+/** Откуда восстановить копию. @returns {Promise<string|null>} */
+export async function openBackupDialog() {
+  if (!hasTauri) return null;
+  if (!TAU.dialog || typeof TAU.dialog.open !== 'function') {
+    throw new Error('Диалог выбора файла недоступен: плагин dialog не загружен');
+  }
+  return TAU.dialog.open({
+    multiple: false,
+    filters: [{ name: 'Резервная копия NyxLauncher', extensions: ['json'] }],
+  });
+}
+
+function listen(event, cb) {
+  if (hasTauri && TAU.event && TAU.event.listen) {
+    let disposed = false;
+    let unlisten = null;
+    TAU.event
+      .listen(event, cb)
+      .then((fn) => {
+        if (disposed) fn();
+        else unlisten = fn;
+      })
+      .catch((e) => {
+        console.error(`nyx: не удалось подписаться на ${event}`, e);
+      });
+    return () => {
+      disposed = true;
+      if (unlisten) unlisten();
+    };
+  }
+  if (event === 'library-changed') {
+    demoLibraryListeners.add(cb);
+    return () => demoLibraryListeners.delete(cb);
+  }
+  demoSettingsListeners.add(cb);
+  return () => demoSettingsListeners.delete(cb);
+}
+
 /**
  * Подписка на library-changed. Возвращает функцию отписки.
  * @param {() => void} cb
  * @returns {() => void}
  */
 export function onLibraryChanged(cb) {
-  if (hasTauri && TAU.event && TAU.event.listen) {
-    let disposed = false;
-    let unlisten = null;
-    TAU.event.listen('library-changed', cb).then((fn) => {
-      if (disposed) fn();
-      else unlisten = fn;
-    }).catch((e) => {
-      console.error('nyx: не удалось подписаться на library-changed', e);
-    });
-    return () => {
-      disposed = true;
-      if (unlisten) unlisten();
-    };
-  }
-  demoListeners.add(cb);
-  return () => demoListeners.delete(cb);
+  return listen('library-changed', cb);
+}
+
+/**
+ * Подписка на settings-changed. Возвращает функцию отписки.
+ * @param {(s: Settings) => void} cb
+ * @returns {() => void}
+ */
+export function onSettingsChanged(cb) {
+  return listen('settings-changed', cb);
 }
 
 // ---------------------------------------------------------------------------
 // Демо-режим: предпросмотр в браузере, без ядра.
 // ---------------------------------------------------------------------------
 
-const demoListeners = new Set();
+const demoLibraryListeners = new Set();
+const demoSettingsListeners = new Set();
+
 function emitDemo() {
-  for (const fn of demoListeners) fn();
+  for (const fn of demoLibraryListeners) fn();
+}
+
+function emitDemoSettings(next) {
+  for (const fn of demoSettingsListeners) fn(next);
 }
 
 function pad2(n) {
@@ -168,6 +342,10 @@ function demoGame(id, name, seconds, last, playing, week, longest, sessions) {
     exe_path: `C:\\Games\\${name}\\game.exe`,
     seconds_played: seconds,
     last_played: last,
+    args: '',
+    work_dir: null,
+    exe_hash: 'demo',
+    added_at: Math.floor(new Date(isoAt(20, 12, 0)).getTime() / 1000),
     playing,
     playing_since: playing ? Math.floor(Date.now() / 1000) - 754 : null,
     _week: week,
@@ -221,6 +399,8 @@ function demoSummary() {
       sessions_count: demo.sessions,
     },
     achievements: demo.achievements.map((a) => ({ ...a })),
+    tracker_paused: demoSettings.tracker_paused,
+    warnings: [],
   };
 }
 
@@ -254,6 +434,7 @@ function demoAdd() {
     0,
   );
   game.exe_path = `C:\\Games\\${name}\\launch.exe`;
+  game.added_at = Math.floor(Date.now() / 1000);
   demo.games.push(game);
   emitDemo();
   const { _week, _longest, _sessions, ...view } = game;
@@ -264,6 +445,7 @@ function demoRemove(id) {
   const before = demo.games.length;
   demo.games = demo.games.filter((g) => g.id !== id);
   if (demo.games.length === before) throw new Error('Игра не найдена');
+  demoSessions.delete(id);
   emitDemo();
 }
 
@@ -279,6 +461,174 @@ function demoLaunch(id) {
   if (next) {
     g.last_played = new Date().toISOString();
     g.playing_since = Math.floor(Date.now() / 1000);
+  }
+  emitDemo();
+}
+
+function demoUpdate({ id, name, args, workDir }) {
+  const g = demo.games.find((x) => x.id === id);
+  if (!g) throw new Error('Игра не найдена');
+  if (!String(name || '').trim()) throw new Error('Название не может быть пустым');
+  g.name = String(name).trim();
+  g.args = String(args || '').trim();
+  g.work_dir = String(workDir || '').trim() || null;
+  emitDemo();
+  const { _week, _longest, _sessions, ...view } = g;
+  return { ...view };
+}
+
+function demoRefresh(id) {
+  const g = demo.games.find((x) => x.id === id);
+  if (!g) throw new Error('Игра не найдена');
+  g.exe_hash = `demo-${Date.now()}`;
+  emitDemo();
+  const { _week, _longest, _sessions, ...view } = g;
+  return { ...view };
+}
+
+// ── демо-настройки ─────────────────────────────────────────────────────────
+
+let demoSettings = {
+  autostart: false,
+  start_minimized: false,
+  close_to_tray: true,
+  minimize_to_tray: false,
+  minimize_on_launch: false,
+  show_icons: true,
+  theme: 'graphite',
+  reduce_motion: false,
+  sort_mode: 'recent',
+  tracker_paused: false,
+  min_session_secs: 60,
+  require_window: true,
+  strict_anticheat: false,
+  count_direct_launch: true,
+  poll_secs: 5,
+};
+
+function demoSettingsView() {
+  return {
+    settings: { ...demoSettings },
+    autostart_enabled: demoSettings.autostart,
+    data_dir: 'C:\\Users\\demo\\AppData\\Roaming\\corp.ventaxis.nyxlauncher',
+    version: 'demo',
+    install_id: 'demo-install',
+    tampered: [],
+    clock_rollback: false,
+  };
+}
+
+function demoSaveSettings(next) {
+  demoSettings = { ...demoSettings, ...next };
+  emitDemoSettings({ ...demoSettings });
+  emitDemo();
+  return demoSettingsView();
+}
+
+// ── демо-история сессий ────────────────────────────────────────────────────
+
+const demoSessions = new Map();
+
+function demoSessionsFor(id) {
+  if (!demoSessions.has(id)) {
+    const g = demo.games.find((x) => x.id === id);
+    const count = Math.min(12, Math.max(2, Math.round(((g && g._sessions) || 4) / 5)));
+    const list = [];
+    let day = 1;
+    for (let i = 0; i < count; i += 1) {
+      day += 1 + (i % 3);
+      const mins = 28 + ((i * 37) % 190);
+      const end = Math.floor(new Date(isoAt(day, 20 + (i % 3), 10)).getTime() / 1000);
+      list.push({
+        id: `dm_${id}_${i}`,
+        game_id: id,
+        start: end - mins * 60,
+        end,
+        seconds: mins * 60,
+        manual: i === 3,
+        active: false,
+      });
+    }
+    if (g && g.playing) {
+      list.unshift({
+        id: `active_${id}`,
+        game_id: id,
+        start: Math.floor(Date.now() / 1000) - 754,
+        end: Math.floor(Date.now() / 1000),
+        seconds: 754,
+        manual: false,
+        active: true,
+      });
+    }
+    demoSessions.set(id, list);
+  }
+  return demoSessions.get(id);
+}
+
+function parseLocalInput(s) {
+  // <input type="datetime-local"> → "YYYY-MM-DDTHH:MM"
+  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(String(s || ''));
+  if (!m) throw new Error('Некорректная дата/время');
+  return Math.floor(new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], 0).getTime() / 1000);
+}
+
+function demoAddSession({ id, start, minutes }) {
+  const list = demoSessionsFor(id);
+  const startTs = parseLocalInput(start);
+  const now = Math.floor(Date.now() / 1000);
+  if (startTs > now + 300) throw new Error('Нельзя добавить сессию в будущем');
+  const end = Math.min(startTs + minutes * 60, now);
+  if (end <= startTs) throw new Error('Сессия должна заканчиваться в прошлом');
+  const s = {
+    id: `m_${Date.now()}`,
+    game_id: id,
+    start: startTs,
+    end,
+    seconds: end - startTs,
+    manual: true,
+    active: false,
+  };
+  list.unshift(s);
+  const g = demo.games.find((x) => x.id === id);
+  if (g) g.seconds_played += s.seconds;
+  emitDemo();
+  return { ...s };
+}
+
+function demoDeleteSession(id) {
+  let found = false;
+  for (const [key, list] of demoSessions) {
+    const next = list.filter((s) => s.id !== id);
+    if (next.length !== list.length) {
+      found = true;
+      const removed = list.find((s) => s.id === id);
+      const g = demo.games.find((x) => x.id === key);
+      if (g && removed && !removed.active) {
+        g.seconds_played = Math.max(0, g.seconds_played - removed.seconds);
+      }
+      demoSessions.set(key, next);
+    }
+  }
+  if (!found) throw new Error('Сессия не найдена');
+  emitDemo();
+}
+
+function demoResetStats(id) {
+  if (id) {
+    demoSessions.delete(id);
+    const g = demo.games.find((x) => x.id === id);
+    if (g) {
+      g.seconds_played = 0;
+      g.last_played = null;
+      g._week = [0, 0, 0, 0, 0, 0, 0];
+    }
+  } else {
+    demoSessions.clear();
+    for (const g of demo.games) {
+      g.seconds_played = 0;
+      g.last_played = null;
+      g._week = [0, 0, 0, 0, 0, 0, 0];
+    }
   }
   emitDemo();
 }

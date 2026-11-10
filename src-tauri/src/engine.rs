@@ -13,6 +13,13 @@ pub struct Session {
     pub start: i64,
     /// Unix-секунды конца сессии.
     pub end: i64,
+    /// Стабильный идентификатор для правки истории; у старых файлов пустой
+    /// и назначается при загрузке.
+    #[serde(default)]
+    pub id: String,
+    /// Сессия добавлена вручную в истории.
+    #[serde(default)]
+    pub manual: bool,
 }
 
 /// Аггрегированная статистика по всем сессиям.
@@ -255,6 +262,8 @@ mod tests {
             game_id: game.into(),
             start,
             end: start + dur_secs,
+            id: String::new(),
+            manual: false,
         }
     }
 
