@@ -2,15 +2,21 @@ import { useEffect, useState } from 'react';
 import WeekChart from './WeekChart.jsx';
 import Achievements from './Achievements.jsx';
 import SessionHistory from './SessionHistory.jsx';
-import { fmtHours, fmtHoursBig, fmtLastPlayed, hueFromName, monogram } from '../format.js';
-import { useCountUp } from '../useCountUp.js';
+import {
+  fmtClock,
+  fmtDuration,
+  fmtHours,
+  fmtLastPlayed,
+  hueFromName,
+  monogram,
+} from '../format.js';
+import { liveDelta, useNow } from '../useLive.js';
 
 function Stat({ label, seconds }) {
-  const v = useCountUp(seconds ?? 0);
   return (
     <div className="stat">
       <div className="stat-label">{label}</div>
-      <div className="stat-num mono">{seconds == null ? '—' : fmtHoursBig(v)}</div>
+      <div className="stat-num mono">{seconds == null ? '—' : fmtDuration(seconds)}</div>
     </div>
   );
 }
@@ -49,11 +55,16 @@ export default function Detail({
   onAddSession,
   onDeleteSession,
   onResetStats,
+  receivedAt,
 }) {
-  const hours = useCountUp(game.seconds_played);
+  const now = useNow(Boolean(game.playing));
+  const extra = liveDelta(game, receivedAt, now);
+  const total = (game.seconds_played || 0) + extra;
+  const today = (game.today_seconds || 0) + extra;
   const weekSum = stats ? stats.week.reduce((s, d) => s + d.seconds, 0) : null;
   const unlockedCount = achievements ? achievements.filter((a) => a.unlocked).length : 0;
   const strict = settings && settings.strict_anticheat;
+  const problem = game.note && game.note !== 'время идёт' ? game.note : null;
 
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(game.name);
@@ -163,14 +174,24 @@ export default function Detail({
             </div>
           </div>
           <div className="hero-hours">
-            <span className="hero-hours-num mono">{fmtHoursBig(hours)}</span>
-            <span className="hero-hours-label">всего</span>
+            <span className="hero-hours-num mono">{fmtClock(total)}</span>
+            <span className="hero-hours-label">
+              {game.playing && <span className="live-dot" aria-hidden="true" />}
+              всего, ч:мм:сс
+            </span>
+            <span className="hero-hours-today mono">сегодня {fmtHours(today)}</span>
           </div>
         </div>
+        {problem && (
+          <p className="hero-note" role="status">
+            <svg className="icon sm" aria-hidden="true"><use href="#i-warning" /></svg>
+            Время не идёт: {problem}
+          </p>
+        )}
       </header>
 
       <div className="stats-row">
-        <Stat label="сегодня" seconds={stats ? stats.today_seconds : null} />
+        <Stat label="сегодня" seconds={stats ? stats.today_seconds + extra : null} />
         <Stat label="за неделю" seconds={weekSum} />
         <Stat label="рекорд сессии" seconds={stats ? stats.longest_session_seconds : null} />
       </div>

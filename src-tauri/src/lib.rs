@@ -2,6 +2,7 @@ mod engine;
 mod integrity;
 mod settings;
 mod store;
+mod tracking;
 mod winutil;
 
 use chrono::{Local, NaiveDateTime};
@@ -17,6 +18,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 use tauri::menu::CheckMenuItem;
 use tauri::{AppHandle, Emitter, Manager, RunEvent, State, Wry};
+use tracking::Signal;
 use winutil::norm_path;
 
 const ACHIEVEMENTS_JSON: &str = include_str!("../achievements.json");
@@ -60,6 +62,12 @@ pub struct GameView {
     pub playing: bool,
     /// Unix-секунды начала текущей сессии (для таймера в статусбаре).
     pub playing_since: Option<i64>,
+    /// Почему время идёт или не идёт — только пока процесс запущен.
+    pub note: Option<String>,
+    /// Секунды за сегодня, за последние 7 дней и число сессий.
+    pub today_seconds: u64,
+    pub week_seconds: u64,
+    pub sessions_count: u64,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -71,6 +79,7 @@ struct WeekDay {
 #[derive(Serialize, Clone, Debug)]
 struct Totals {
     seconds: u64,
+    today_seconds: u64,
     week: Vec<WeekDay>,
     streak_days: u64,
     longest_session_seconds: u64,
@@ -175,6 +184,8 @@ struct AppState {
     /// id игры → PID, запущенный лаунчером (строгий режим).
     launched: Mutex<HashMap<String, u32>>,
     meta: Mutex<Meta>,
+    /// id игры → причина, по которой время идёт или не идёт.
+    notes: Mutex<HashMap<String, String>>,
     tampered: Mutex<Vec<String>>,
     clock_rollback: Mutex<bool>,
     /// Пункт трея «Пауза», чтобы синхронизировать галочку с настройками.
@@ -358,29 +369,59 @@ fn get_summary(state: State<AppState>) -> Summary {
         )
     };
 
-    let game_views: Vec<GameView> = games_snapshot
-        .iter()
-        .map(|g| {
-            // live — только текущая незакрытая сессия этой игры
-            let live = active_snapshot
-                .get(&g.id)
-                .map(|(start, end)| (*end - *start).max(0) as u64)
-                .unwrap_or(0);
-            GameView {
-                id: g.id.clone(),
-                name: g.name.clone(),
-                exe_path: g.exe_path.clone(),
-                seconds_played: g.seconds_played + live,
-                last_played: g.last_played.clone(),
-                args: g.args.clone(),
-                work_dir: g.work_dir.clone(),
-                exe_hash: g.exe_hash.clone(),
-                added_at: g.added_at,
-                playing: active_snapshot.contains_key(&g.id),
-                playing_since: active_snapshot.get(&g.id).map(|(start, _)| *start),
+    let game_views: Vec<GameView> = {
+        let notes = state.notes.lock().unwrap().clone();
+        // Активность по играм: сегодня / за 7 дней / число сессий.
+        let today_key = engine::date_key(now_ts());
+        let week_keys: HashSet<String> = (0..7)
+            .map(|i| {
+                (Local::now().date_naive() - chrono::Duration::days(i))
+                    .format("%Y-%m-%d")
+                    .to_string()
+            })
+            .collect();
+        let mut per_game: HashMap<String, (u64, u64, u64)> = HashMap::new();
+        for s in &all_sessions {
+            let entry = per_game.entry(s.game_id.clone()).or_insert((0, 0, 0));
+            entry.2 += 1;
+            let dur = (s.end - s.start).max(0) as u64;
+            let key = engine::date_key(s.start);
+            if key == today_key {
+                entry.0 += dur;
             }
-        })
-        .collect();
+            if week_keys.contains(&key) {
+                entry.1 += dur;
+            }
+        }
+        games_snapshot
+            .iter()
+            .map(|g| {
+                // live — только текущая незакрытая сессия этой игры
+                let live = active_snapshot
+                    .get(&g.id)
+                    .map(|(start, end)| (*end - *start).max(0) as u64)
+                    .unwrap_or(0);
+                let (today, week, count) = per_game.get(&g.id).copied().unwrap_or((0, 0, 0));
+                GameView {
+                    id: g.id.clone(),
+                    name: g.name.clone(),
+                    exe_path: g.exe_path.clone(),
+                    seconds_played: g.seconds_played + live,
+                    last_played: g.last_played.clone(),
+                    args: g.args.clone(),
+                    work_dir: g.work_dir.clone(),
+                    exe_hash: g.exe_hash.clone(),
+                    added_at: g.added_at,
+                    playing: active_snapshot.contains_key(&g.id),
+                    playing_since: active_snapshot.get(&g.id).map(|(start, _)| *start),
+                    note: notes.get(&g.id).cloned(),
+                    today_seconds: today,
+                    week_seconds: week,
+                    sessions_count: count,
+                }
+            })
+            .collect()
+    };
 
     let stats = engine::compute(&all_sessions);
     let tracker_paused = state.settings.lock().unwrap().tracker_paused;
@@ -389,6 +430,11 @@ fn get_summary(state: State<AppState>) -> Summary {
         games: game_views,
         totals: Totals {
             seconds: stats.total_seconds,
+            today_seconds: stats
+                .per_day
+                .get(&engine::date_key(now_ts()))
+                .copied()
+                .unwrap_or(0),
             week: week_from(&stats.per_day),
             streak_days: stats.streak_days,
             longest_session_seconds: stats.longest_session_seconds,
@@ -732,7 +778,7 @@ fn set_settings(
     next: Settings,
 ) -> Result<SettingsView, String> {
     let mut next = next;
-    next.sanitize();
+    next.migrate();
 
     let prev_autostart = state.settings.lock().unwrap().autostart;
     // Автозапуск трогаем только при изменении или при включении
@@ -1121,7 +1167,7 @@ fn import_data(app: AppHandle, state: State<AppState>, path: String) -> Result<S
         *state.sessions.lock().unwrap() = sessions.clone();
         *state.unlocked.lock().unwrap() = bundle.unlocked;
         if let Some(mut s) = bundle.settings {
-            s.sanitize();
+            s.migrate();
             *state.settings.lock().unwrap() = s;
         }
         state.active.lock().unwrap().clear();
@@ -1211,6 +1257,9 @@ fn close_all_active(state: &AppState, min_secs: u64) -> bool {
 fn spawn_tracker(app: AppHandle) {
     thread::spawn(move || {
         let mut last_meta = now_ts();
+        // Хеш exe считается один раз на файл: SHA-256 гигабайтной игры не
+        // должен читаться каждые две секунды.
+        let mut hash_cache: HashMap<(String, String), bool> = HashMap::new();
         loop {
             let state = app.state::<AppState>();
             let (poll, paused, require_window, strict, direct, min_secs) = {
@@ -1232,16 +1281,17 @@ fn spawn_tracker(app: AppHandle) {
                 if close_all_active(&state, min_secs) {
                     let _ = app.emit("library-changed", ());
                 }
+                state.notes.lock().unwrap().clear();
                 continue;
             }
 
             // матч по полному пути exe (нормализованному): одинаковые имена файлов
             // у разных игр больше не путают счётчик
-            let wanted: Vec<(String, String)> = {
+            let wanted: Vec<(String, String, Option<String>)> = {
                 let games = state.games.lock().unwrap();
                 games
                     .iter()
-                    .map(|g| (g.id.clone(), norm_path(&g.exe_path)))
+                    .map(|g| (g.id.clone(), norm_path(&g.exe_path), g.exe_hash.clone()))
                     .collect()
             };
             if wanted.is_empty() {
@@ -1249,6 +1299,7 @@ fn spawn_tracker(app: AppHandle) {
                 if close_all_active(&state, min_secs) {
                     let _ = app.emit("library-changed", ());
                 }
+                state.notes.lock().unwrap().clear();
                 continue;
             }
 
@@ -1274,29 +1325,63 @@ fn spawn_tracker(app: AppHandle) {
 
             // Окна проверяем ДО захвата active: перебор окон не должен
             // блокировать get_summary.
-            let mut states: Vec<(String, bool)> = Vec::with_capacity(wanted.len());
-            for (id, exe) in &wanted {
+            let mut states: Vec<(String, Option<String>, crate::tracking::Verdict)> =
+                Vec::with_capacity(wanted.len());
+            for (id, exe, stored_hash) in &wanted {
                 let pids = procs.get(exe);
-                let launched_pid = launched.get(id).copied();
-                let mut ok = pids.is_some();
-                if let Some(pids) = pids {
-                    if strict {
-                        // Только процесс, запущенный лаунчером, и только с окном.
-                        ok = launched_pid.is_some_and(|pid| pids.contains(&pid));
-                    } else if !direct {
-                        ok = launched_pid.is_some();
+                let running = pids.is_some_and(|p| !p.is_empty());
+                let from_launcher = match (launched.get(id).copied(), pids) {
+                    (Some(pid), Some(pids)) => pids.contains(&pid),
+                    _ => false,
+                };
+                // Хеш нужен только строгому режиму и только для живого процесса.
+                let hash = if strict && running {
+                    match stored_hash {
+                        None => None,
+                        Some(want) => {
+                            let key = (id.clone(), want.clone());
+                            let ok = match hash_cache.get(&key) {
+                                Some(v) => *v,
+                                None => {
+                                    let v = integrity::sha256_file(Path::new(exe))
+                                        .as_deref()
+                                        .is_some_and(|got| got.eq_ignore_ascii_case(want));
+                                    hash_cache.insert(key, v);
+                                    v
+                                }
+                            };
+                            Some(ok)
+                        }
                     }
-                    if ok && (require_window || strict) {
-                        ok = winutil::has_visible_window(pids);
-                    }
-                }
-                states.push((id.clone(), ok));
+                } else {
+                    None
+                };
+                // Перебор окон — самый дорогой шаг, поэтому только когда нужен.
+                let window_ok = running
+                    && require_window
+                    && pids.is_some_and(|p| winutil::has_visible_window(p));
+                let signal = Signal {
+                    running,
+                    from_launcher,
+                    hash,
+                    window_ok,
+                    direct_allowed: direct,
+                    strict,
+                    require_window,
+                };
+                let verdict = tracking::verdict(signal);
+                let note = if running {
+                    Some(verdict.reason().to_string())
+                } else {
+                    None
+                };
+                states.push((id.clone(), note, verdict));
             }
 
             {
                 let mut active = state.active.lock().unwrap();
-                for (id, ok) in &states {
-                    if *ok {
+                for (id, _, verdict) in &states {
+                    if verdict.is_count() {
                         any_playing = true;
                         if let std::collections::hash_map::Entry::Vacant(e) =
                             active.entry(id.clone())
@@ -1310,7 +1395,7 @@ fn spawn_tracker(app: AppHandle) {
                     }
                 }
                 // игра удалена из библиотеки, пока процесс был жив
-                let known: HashSet<&String> = wanted.iter().map(|(id, _)| id).collect();
+                let known: HashSet<&String> = wanted.iter().map(|(id, _, _)| id).collect();
                 let stale: Vec<String> = active
                     .keys()
                     .filter(|k| !known.contains(k))
@@ -1321,6 +1406,18 @@ fn spawn_tracker(app: AppHandle) {
                         changed = true;
                         closed.push(a);
                     }
+                }
+            }
+
+            // Причины для интерфейса: только по запущенным процессам.
+            let notes: HashMap<String, String> = states
+                .into_iter()
+                .filter_map(|(id, note, _)| note.map(|n| (id, n)))
+                .collect();
+            {
+                let mut current = state.notes.lock().unwrap();
+                if *current != notes {
+                    *current = notes;
                 }
             }
 
@@ -1606,7 +1703,19 @@ pub fn run() {
             ensure_session_ids(&mut sessions);
             let unlocked: HashMap<String, String> = unlocked_loaded.unwrap_or_default();
             let mut settings: Settings = settings_loaded.unwrap_or_default();
-            settings.sanitize();
+            // Миграция старых значений: правим файл один раз, чтобы 0.5.0
+            // не пересчитывала пороги при каждом запуске.
+            let schema_before = settings.schema;
+            settings.migrate();
+            if settings.schema > schema_before {
+                if let Err(e) = integrity::save_signed(
+                    &signer,
+                    &data_dir.join("settings.json"),
+                    &settings,
+                ) {
+                    eprintln!("nyx: не удалось сохранить миграцию настроек: {}", e);
+                }
+            }
             let mut meta: Meta = meta_loaded.unwrap_or_default();
             if meta.install_id.is_empty() {
                 meta.install_id = random_install_id();
@@ -1644,6 +1753,7 @@ pub fn run() {
                 icons: Mutex::new(HashMap::new()),
                 launched: Mutex::new(HashMap::new()),
                 meta: Mutex::new(meta.clone()),
+                notes: Mutex::new(HashMap::new()),
                 tampered: Mutex::new(tampered.clone()),
                 clock_rollback: Mutex::new(clock_rollback),
                 tray_pause: Mutex::new(None),

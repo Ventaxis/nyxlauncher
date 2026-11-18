@@ -2,18 +2,30 @@
 
 const nf = new Intl.NumberFormat('ru-RU');
 
-/** Часы для сводок: целые, меньше часа — минуты. @param {number} seconds */
+/** Часы для сводок: меньше минуты — секунды, меньше часа — минуты. @param {number} seconds */
 export function fmtHours(seconds) {
-  if (!Number.isFinite(seconds) || seconds <= 0) return '0 ч';
-  if (seconds < 3600) return `${Math.max(1, Math.round(seconds / 60))} мин`;
-  return `${nf.format(Math.floor(seconds / 3600))} ч`;
+  const s = Math.max(0, Math.floor(seconds || 0));
+  if (s === 0) return '0 ч';
+  if (s < 60) return `${s} с`;
+  if (s < 3600) return `${Math.floor(s / 60)} мин`;
+  return `${nf.format(Math.floor(s / 3600))} ч`;
+}
+
+/** Полный счётчик: «4:07:12», «0:03:07». Секунды всегда на месте. @param {number} seconds */
+export function fmtClock(seconds) {
+  const s = Math.max(0, Math.floor(seconds || 0));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  return `${h}:${pad2(m)}:${pad2(s % 60)}`;
 }
 
 /** Крупные часы: до 100 ч — один знак после запятой, дальше целые. @param {number} seconds */
 export function fmtHoursBig(seconds) {
-  if (!Number.isFinite(seconds) || seconds <= 0) return '0 ч';
-  if (seconds < 3600) return `${Math.max(1, Math.round(seconds / 60))} мин`;
-  const h = seconds / 3600;
+  const s = Math.max(0, Math.floor(seconds || 0));
+  if (s === 0) return '0 ч';
+  if (s < 60) return `${s} с`;
+  if (s < 3600) return `${Math.max(1, Math.round(s / 60))} мин`;
+  const h = s / 3600;
   if (h < 100) return `${nf.format(Math.round(h * 10) / 10)} ч`;
   return `${nf.format(Math.floor(h))} ч`;
 }
@@ -75,13 +87,22 @@ export function fmtDateTime(ts) {
   return `${date}, ${time}`;
 }
 
-/** Длительность сессии: «1 ч 24 мин» / «37 мин». @param {number} seconds */
+/** Длительность сессии: «1 ч 24 мин 09 с» / «37 мин 12 с» / «8 с». @param {number} seconds */
 export function fmtDuration(seconds) {
   const s = Math.max(0, Math.floor(seconds || 0));
   const h = Math.floor(s / 3600);
   const m = Math.floor((s % 3600) / 60);
-  if (h > 0) return `${h} ч ${pad2(m)} мин`;
-  return `${Math.max(1, m)} мин`;
+  const sec = s % 60;
+  if (h > 0) return `${h} ч ${pad2(m)} мин ${pad2(sec)} с`;
+  if (m > 0) return `${m} мин ${pad2(sec)} с`;
+  return `${sec} с`;
+}
+
+/** Прирост за период: «+12 мин», «+1 ч 04 мин», «без изменений». @param {number} seconds */
+export function fmtDelta(seconds) {
+  const s = Math.max(0, Math.floor(seconds || 0));
+  if (s === 0) return 'без изменений';
+  return `+${fmtHours(s)}`;
 }
 
 /** Значение для <input type="datetime-local"> из Unix-секунд. @param {number} ts */

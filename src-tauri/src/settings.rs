@@ -48,13 +48,42 @@ pub struct Settings {
     /// Учитывать только процессы с видимым окном (античит от «пустышек»).
     #[serde(default = "default_true")]
     pub require_window: bool,
-    /// Строгий режим: exe должен совпасть по хешу и быть запущен лаунчером.
+    /// Строгий режим: exe должен совпасть по хешу с сохранённым при добавлении.
+    /// Источник запуска (лаунчер или рабочий стол) проверяется отдельно —
+    /// настройкой `count_direct_launch`.
     pub strict_anticheat: bool,
-    /// Учитывать запуск игры напрямую (не через лаунчер). В строгом режиме игнорируется.
+    /// Учитывать запуск игры напрямую (не через лаунчер).
     #[serde(default = "default_true")]
     pub count_direct_launch: bool,
     /// Интервал опроса процессов, секунды (2..=60).
     pub poll_secs: u64,
+    /// Версия схемы настроек: по ней выполняется миграция значений.
+    #[serde(default)]
+    pub schema: u64,
+}
+
+/// Текущая версия схемы настроек.
+pub const SCHEMA: u64 = 1;
+
+impl Settings {
+    /// Миграция значений, которые в старых версиях мешали учёту времени.
+    ///
+    /// 0.4.x хранил порог 60 секунд (короткие сессии пропадали) и считал
+    /// строгий режим требованием запускать игру только из лаунчера — из-за
+    /// этого у игр, запущенных с рабочего стола, время не шло вовсе.
+    pub fn migrate(&mut self) {
+        if self.schema < SCHEMA {
+            if self.min_session_secs == 60 {
+                self.min_session_secs = 5;
+            }
+            // Опрос раз в 5 секунд — старый дефолт: концы сессий теряли до 5 с.
+            if self.poll_secs == 5 {
+                self.poll_secs = 2;
+            }
+            self.schema = SCHEMA;
+        }
+        self.sanitize();
+    }
 }
 
 impl Default for Settings {
@@ -71,11 +100,14 @@ impl Default for Settings {
             reduce_motion: false,
             sort_mode: "recent".into(),
             tracker_paused: false,
-            min_session_secs: 60,
+            min_session_secs: 5,
             require_window: true,
             strict_anticheat: false,
             count_direct_launch: true,
-            poll_secs: 5,
+            // Опрос раз в 2 секунды: старт и конец сессии фиксируются с
+            // точностью до секунд, а не «плюс-минус пять».
+            poll_secs: 2,
+            schema: SCHEMA,
         }
     }
 }
@@ -195,6 +227,39 @@ mod tests {
         let s: Settings = serde_json::from_str(r#"{"theme":"oled"}"#).unwrap();
         assert_eq!(s.theme, "oled");
         assert!(s.require_window);
-        assert_eq!(s.poll_secs, 5);
+        assert_eq!(s.poll_secs, 2);
+        assert_eq!(s.schema, 0, "старый файл не знает о версии схемы");
+    }
+
+    #[test]
+    fn migration_lowers_old_session_threshold() {
+        // 0.4.x: порог 60 с отбрасывал короткие сессии — поднимаем до 5 с.
+        let mut s: Settings =
+            serde_json::from_str(r#"{"min_session_secs":60,"poll_secs":5}"#).unwrap();
+        s.migrate();
+        assert_eq!(s.min_session_secs, 5);
+        assert_eq!(s.poll_secs, 2);
+        assert_eq!(s.schema, SCHEMA);
+    }
+
+    #[test]
+    fn migration_keeps_deliberate_threshold() {
+        // Осознанно выставленный порог не трогаем: 120 с — не дефолт.
+        let mut s: Settings =
+            serde_json::from_str(r#"{"min_session_secs":120,"poll_secs":10}"#).unwrap();
+        s.migrate();
+        assert_eq!(s.min_session_secs, 120);
+        assert_eq!(s.poll_secs, 10);
+    }
+
+    #[test]
+    fn migration_is_one_time() {
+        let mut s = Settings {
+            min_session_secs: 60,
+            schema: SCHEMA,
+            ..Settings::default()
+        };
+        s.migrate();
+        assert_eq!(s.min_session_secs, 60, "после миграции значение не переписывается");
     }
 }

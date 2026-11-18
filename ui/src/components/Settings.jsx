@@ -13,6 +13,8 @@ const SORTS = [
 
 const MIN_SESSIONS = [
   { value: 0, label: 'Любая (0 с)' },
+  { value: 5, label: '5 секунд' },
+  { value: 10, label: '10 секунд' },
   { value: 30, label: '30 секунд' },
   { value: 60, label: '1 минута' },
   { value: 120, label: '2 минуты' },
@@ -95,7 +97,7 @@ export default function Settings({
       </header>
 
       <div className="settings-grid">
-        <section className="card">
+        <section className="settings-card">
           <h2 className="card-title">
             <svg className="icon" aria-hidden="true"><use href="#i-monitor" /></svg>
             Запуск и фон
@@ -133,7 +135,7 @@ export default function Settings({
           />
         </section>
 
-        <section className="card">
+        <section className="settings-card">
           <h2 className="card-title">
             <svg className="icon" aria-hidden="true"><use href="#i-image" /></svg>
             Интерфейс
@@ -181,7 +183,7 @@ export default function Settings({
           />
         </section>
 
-        <section className="card">
+        <section className="settings-card">
           <h2 className="card-title">
             <svg className="icon" aria-hidden="true"><use href="#i-clock" /></svg>
             Учёт времени
@@ -217,7 +219,7 @@ export default function Settings({
 
           <Choice
             label="Минимальная сессия"
-            hint="Короткие запуски не засчитываются — меньше случайного времени."
+            hint="Короткие запуски не засчитываются — меньше случайного времени. По умолчанию 5 секунд: обычный запуск не теряется."
             value={s.min_session_secs}
             options={MIN_SESSIONS}
             onChange={(v) => onChange({ min_session_secs: Number(v) })}
@@ -230,14 +232,13 @@ export default function Settings({
           />
           <Toggle
             label="Учитывать прямой запуск"
-            hint="Если выключить, считаются только игры, запущенные из NyxLauncher."
+            hint="Игра, запущенная с рабочего стола, тоже считается. Выключите, если нужны только запуски из лаунчера."
             checked={s.count_direct_launch}
             onChange={(v) => onChange({ count_direct_launch: v })}
-            disabled={s.strict_anticheat}
           />
         </section>
 
-        <section className="card">
+        <section className="settings-card">
           <h2 className="card-title">
             <svg className="icon" aria-hidden="true"><use href="#i-shield" /></svg>
             Защита от накрутки
@@ -245,7 +246,7 @@ export default function Settings({
 
           <Toggle
             label="Строгий режим"
-            hint="Требует совпадения хеша exe, запуска из лаунчера и видимого окна. Игры без хеша нужно перепроверить."
+            hint="Сверяет хеш exe с сохранённым: подменённый файл не получит времени. Запускать игру можно как из лаунчера, так и с рабочего стола."
             checked={s.strict_anticheat}
             onChange={(v) => onChange({ strict_anticheat: v })}
           />
@@ -273,7 +274,7 @@ export default function Settings({
           </div>
         </section>
 
-        <section className="card">
+        <section className="settings-card">
           <h2 className="card-title">
             <svg className="icon" aria-hidden="true"><use href="#i-folder" /></svg>
             Данные
@@ -323,7 +324,7 @@ export default function Settings({
           </div>
         </section>
 
-        <section className="card">
+        <section className="settings-card">
           <h2 className="card-title">
             <svg className="icon" aria-hidden="true"><use href="#i-info" /></svg>
             О программе

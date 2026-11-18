@@ -20,6 +20,10 @@ export const hasTauri = Boolean(TAU && TAU.core && typeof TAU.core.invoke === 'f
  * @property {number} added_at Unix-секунды
  * @property {boolean} playing
  * @property {number|null} playing_since Unix-секунды начала текущей сессии
+ * @property {string|null} note почему время идёт или не идёт
+ * @property {number} today_seconds
+ * @property {number} week_seconds
+ * @property {number} sessions_count
  */
 
 /**
@@ -31,6 +35,7 @@ export const hasTauri = Boolean(TAU && TAU.core && typeof TAU.core.invoke === 'f
 /**
  * @typedef {Object} Totals
  * @property {number} seconds
+ * @property {number} today_seconds
  * @property {WeekDay[]} week 7 дней, старые → сегодня
  * @property {number} streak_days
  * @property {number} longest_session_seconds
@@ -84,6 +89,7 @@ export const hasTauri = Boolean(TAU && TAU.core && typeof TAU.core.invoke === 'f
  * @property {boolean} strict_anticheat
  * @property {boolean} count_direct_launch
  * @property {number} poll_secs
+ * @property {number} schema
  */
 
 /**
@@ -171,9 +177,12 @@ export async function setSettings(next) {
 }
 
 /** Иконки exe: id → data:URL. @returns {Promise<Record<string,string>>} */
+/** @returns {Promise<Record<string, string>>} id игры → data-URI иконки */
 export async function getIcons() {
   if (hasTauri) return core().invoke('get_icons');
-  return {};
+  const out = {};
+  for (const g of demo.games) out[g.id] = demoIcon(g.name);
+  return out;
 }
 
 /** @returns {Promise<Session[]>} */
@@ -350,8 +359,37 @@ function demoHash(name) {
   return out;
 }
 
-function demoGame(id, name, seconds, last, playing, week, longest, sessions) {
-  const folder = name.replace(/[^\p{L}\p{N}]+/gu, '');
+/** Hue из имени — тот же принцип, что и в обложках интерфейса. */
+function demoHue(name) {
+  let h = 0;
+  for (let i = 0; i < name.length; i += 1) h = (h * 31 + name.charCodeAt(i)) >>> 0;
+  let hue = h % 360;
+  if (hue > 240 && hue < 320) hue = 200 + (hue - 240) / 2;
+  return Math.round(hue);
+}
+
+/**
+ * Демо-иконка: серп и звезда в цвете имени.
+ * Нужна, чтобы предпросмотр без ядра выглядел как настоящая библиотека.
+ */
+function demoIcon(name) {
+  const hue = demoHue(name);
+  const letters = String(name)
+    .trim()
+    .split(/\s+/)
+    .slice(0, 2)
+    .map((w) => w[0].toUpperCase())
+    .join('');
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+<rect width="128" height="128" rx="26" fill="hsl(${hue} 24% 15%)"/>
+<circle cx="64" cy="64" r="40" fill="none" stroke="hsl(${hue} 45% 64% / 0.28)" stroke-width="2"/>
+<text x="64" y="78" font-family="Cascadia Mono, Consolas, monospace" font-size="40" font-weight="600" text-anchor="middle" fill="hsl(${hue} 46% 72%)">${letters}</text>
+<circle cx="98" cy="30" r="3.4" fill="hsl(${hue} 60% 76%)"/>
+</svg>`;
+  return `data:image/svg+xml,${encodeURIComponent(svg)}`;
+}
+
+function demoGame(id, name, seconds, last, playing, week, longest, sessions) {  const folder = name.replace(/[^\p{L}\p{N}]+/gu, '');
   return {
     id,
     name,
@@ -364,6 +402,10 @@ function demoGame(id, name, seconds, last, playing, week, longest, sessions) {
     added_at: Math.floor(new Date(isoAt(20, 12, 0)).getTime() / 1000),
     playing,
     playing_since: playing ? Math.floor(Date.now() / 1000) - 754 : null,
+    note: playing ? 'время идёт' : null,
+    today_seconds: week[6] || 0,
+    week_seconds: week.reduce((s, v) => s + v, 0),
+    sessions_count: sessions,
     _week: week,
     _longest: longest,
     _sessions: sessions,
@@ -409,6 +451,7 @@ function demoSummary() {
     games,
     totals: {
       seconds,
+      today_seconds: week[6].seconds,
       week,
       streak_days: demo.streak,
       longest_session_seconds: demo.longest,
@@ -515,11 +558,12 @@ let demoSettings = {
   reduce_motion: false,
   sort_mode: 'recent',
   tracker_paused: false,
-  min_session_secs: 60,
+  min_session_secs: 5,
   require_window: true,
   strict_anticheat: false,
   count_direct_launch: true,
-  poll_secs: 5,
+  poll_secs: 2,
+  schema: 1,
 };
 
 function demoSettingsView() {

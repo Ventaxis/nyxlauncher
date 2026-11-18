@@ -7,6 +7,7 @@ export default function Topbar({
   onSettings,
   paused,
   warnings,
+  searchRef,
 }) {
   const inSettings = view === 'settings';
 
@@ -27,6 +28,7 @@ export default function Topbar({
         <div className="search">
           <svg className="icon sm search-icon" aria-hidden="true"><use href="#i-search" /></svg>
           <input
+            ref={searchRef}
             type="text"
             value={query}
             onChange={(e) => onQuery(e.target.value)}
@@ -35,6 +37,7 @@ export default function Topbar({
             autoComplete="off"
             spellCheck={false}
           />
+          <span className="kbd search-kbd" aria-hidden="true">/</span>
         </div>
       )}
 

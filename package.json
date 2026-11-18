@@ -1,7 +1,8 @@
 {
   "name": "nyxlauncher",
   "private": true,
-  "version": "0.4.0",
+  "version": "0.5.0",
+  "type": "module",
   "description": "Локальный игровой хаб для Windows: библиотека, учёт времени, статистика и достижения",
   "author": "Ventaxis Corp",
   "license": "UNLICENSED",
@@ -11,7 +12,8 @@
   },
   "scripts": {
     "build": "vite build",
-    "dev": "vite"
+    "dev": "vite",
+    "test": "node --test \"test/**/*.test.mjs\""
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.12.4",

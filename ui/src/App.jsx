@@ -42,6 +42,7 @@ const BOOT_TIMEOUT_MS = 10000;
 
 export default function App() {
   const [summary, setSummary] = useState(null);
+  const [summaryAt, setSummaryAt] = useState(() => Date.now());
   const [stats, setStats] = useState(null);
   const [sessions, setSessions] = useState(null);
   const [icons, setIcons] = useState({});
@@ -60,6 +61,7 @@ export default function App() {
   const saveTimer = useRef(null);
   const savedTimer = useRef(null);
   const settingsRef = useRef(null);
+  const searchRef = useRef(null);
 
   const settings = settingsView ? settingsView.settings : null;
 
@@ -73,6 +75,8 @@ export default function App() {
     try {
       const next = await getSummary();
       setSummary(next);
+      // Живые счётчики считают от момента снимка, а не от старта приложения.
+      setSummaryAt(Date.now());
       setLoadError(null);
     } catch (e) {
       const text = errText(e);
@@ -413,6 +417,23 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKey);
   }, [view, query, status]);
 
+  // «/» — прыжок в поиск, как в почте и файловых менеджерах.
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key !== '/' || e.ctrlKey || e.metaKey || e.altKey) return;
+      const el = e.target;
+      const typing = el
+        && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable);
+      if (typing) return;
+      e.preventDefault();
+      if (view !== 'shelf') setView('shelf');
+      searchRef.current?.focus();
+      searchRef.current?.select();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [view]);
+
   const handleQuery = useCallback((q) => {
     setQuery(q);
     if (q && view === 'detail') setView('shelf');
@@ -444,6 +465,7 @@ export default function App() {
         onSettings={toggleSettings}
         paused={summary ? summary.tracker_paused : false}
         warnings={warnings}
+        searchRef={searchRef}
       />
 
       <main className="screen view-fade" key={view}>
@@ -485,11 +507,14 @@ export default function App() {
             entered={entered}
             onOpen={openGame}
             onAdd={handleAdd}
+            onLaunch={handleLaunch}
             error={loadError}
             onRetry={retry}
             settings={settings}
             onSort={(mode) => applySettings({ sort_mode: mode })}
             icons={icons}
+            receivedAt={summaryAt}
+            busy={busy}
           />
         ) : (
           <Detail
@@ -508,6 +533,7 @@ export default function App() {
             onAddSession={handleAddSession}
             onDeleteSession={handleDeleteSession}
             onResetStats={handleResetGame}
+            receivedAt={summaryAt}
           />
         )}
       </main>

@@ -2,17 +2,21 @@ import { useEffect, useRef, useState } from 'react';
 import { fmtChartVal, weekdayShort } from '../format.js';
 
 const H = 240;
-const PAD_T = 32;
-const PAD_B = 30;
 const PAD_X = 26;
 
 /**
  * Герой страницы детализации: SVG-линия недели, draw-in при монтировании
  * и при смене истории (последний день растёт «живьём» — без ре-анимации).
+ *
+ * height — для компактного графика в боковой колонке полки.
  */
-export default function WeekChart({ week }) {
+export default function WeekChart({ week, height }) {
   const wrapRef = useRef(null);
   const [width, setWidth] = useState(0);
+  const h = Number.isFinite(height) ? height : H;
+  const compact = h < 180;
+  const padT = h < 180 ? 18 : 32;
+  const padB = h < 180 ? 20 : 30;
 
   useEffect(() => {
     const el = wrapRef.current;
@@ -37,11 +41,11 @@ export default function WeekChart({ week }) {
 
   const w = width || 720;
   const plotW = w - PAD_X * 2;
-  const plotH = H - PAD_T - PAD_B;
-  const baseY = PAD_T + plotH;
+  const plotH = h - padT - padB;
+  const baseY = padT + plotH;
   const max = Math.max(60, ...data.map((d) => d.seconds));
   const x = (i) => PAD_X + (plotW * i) / (data.length - 1);
-  const y = (v) => PAD_T + plotH * (1 - v / max);
+  const y = (v) => padT + plotH * (1 - v / max);
 
   const line = data
     .map((d, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)} ${y(d.seconds).toFixed(1)}`)
@@ -54,15 +58,15 @@ export default function WeekChart({ week }) {
       {width > 0 && (
         <svg
           width={w}
-          height={H}
-          viewBox={`0 0 ${w} ${H}`}
+          height={h}
+          viewBox={`0 0 ${w} ${h}`}
           role="img"
           aria-label="Часы за последние семь дней"
         >
           <g className="chart-grid" aria-hidden="true">
             <line className="chart-base" x1={PAD_X} x2={w - PAD_X} y1={baseY} y2={baseY} />
             <line x1={PAD_X} x2={w - PAD_X} y1={y(max / 2)} y2={y(max / 2)} />
-            <line x1={PAD_X} x2={w - PAD_X} y1={PAD_T} y2={PAD_T} />
+            <line x1={PAD_X} x2={w - PAD_X} y1={padT} y2={padT} />
           </g>
 
           <path className="chart-area" key={`a-${sig}`} d={area} aria-hidden="true" />
@@ -70,7 +74,7 @@ export default function WeekChart({ week }) {
 
           {data.map((d, i) => (
             <g key={d.date || i} className={`chart-day${i === todayIdx ? ' is-today' : ''}`}>
-              {d.seconds > 0 && (
+              {d.seconds > 0 && !compact && (
                 <text
                   className={`chart-val mono${i === todayIdx ? ' is-today' : ''}`}
                   x={x(i)}
@@ -91,7 +95,7 @@ export default function WeekChart({ week }) {
                 cy={y(d.seconds)}
                 r="3.2"
               />
-              <text className="chart-day-label mono" x={x(i)} y={H - 8} textAnchor="middle">
+              <text className="chart-day-label mono" x={x(i)} y={h - 8} textAnchor="middle">
                 {weekdayShort(d.date)}
               </text>
             </g>

@@ -103,7 +103,8 @@ fn secs_between(start: i64, end: i64) -> u64 {
     }
 }
 
-fn date_key(ts: i64) -> String {
+/// Локальная дата `YYYY-MM-DD` для Unix-времени.
+pub fn date_key(ts: i64) -> String {
     // earliest() не теряет сессии в неоднозначный час перевода стрелок
     // (single() там возвращает None).
     Local
