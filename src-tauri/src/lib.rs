@@ -1708,11 +1708,9 @@ pub fn run() {
             let schema_before = settings.schema;
             settings.migrate();
             if settings.schema > schema_before {
-                if let Err(e) = integrity::save_signed(
-                    &signer,
-                    &data_dir.join("settings.json"),
-                    &settings,
-                ) {
+                if let Err(e) =
+                    integrity::save_signed(&signer, &data_dir.join("settings.json"), &settings)
+                {
                     eprintln!("nyx: не удалось сохранить миграцию настроек: {}", e);
                 }
             }

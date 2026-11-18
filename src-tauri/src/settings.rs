@@ -260,6 +260,9 @@ mod tests {
             ..Settings::default()
         };
         s.migrate();
-        assert_eq!(s.min_session_secs, 60, "после миграции значение не переписывается");
+        assert_eq!(
+            s.min_session_secs, 60,
+            "после миграции значение не переписывается"
+        );
     }
 }
