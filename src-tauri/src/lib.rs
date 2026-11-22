@@ -1,5 +1,6 @@
 mod engine;
 mod integrity;
+mod journal;
 mod settings;
 mod store;
 mod tracking;
@@ -15,10 +16,10 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tauri::menu::CheckMenuItem;
 use tauri::{AppHandle, Emitter, Manager, RunEvent, State, Wry};
-use tracking::Signal;
+use tracking::{ActiveSession, Signal};
 use winutil::norm_path;
 
 const ACHIEVEMENTS_JSON: &str = include_str!("../achievements.json");
@@ -122,43 +123,8 @@ struct GameStats {
     week: Vec<WeekDay>,
 }
 
-/// Незакрытая сессия: процесс ещё запущен.
-#[derive(Clone, Debug)]
-struct ActiveSession {
-    game_id: String,
-    /// Unix-время старта — только для отображения.
-    start: i64,
-    /// Монотонные часы: длительность не зависит от перевода системных часов.
-    started: Instant,
-}
-
-impl ActiveSession {
-    fn new(game_id: &str, start: i64) -> Self {
-        Self {
-            game_id: game_id.to_string(),
-            start,
-            started: Instant::now(),
-        }
-    }
-
-    fn seconds(&self) -> u64 {
-        self.started.elapsed().as_secs()
-    }
-
-    fn end(&self) -> i64 {
-        self.start + self.seconds() as i64
-    }
-
-    fn snapshot(&self) -> Session {
-        Session {
-            game_id: self.game_id.clone(),
-            start: self.start,
-            end: self.end(),
-            id: format!("s_{}", self.start),
-            manual: false,
-        }
-    }
-}
+/// Незакрытая сессия живёт в `tracking::ActiveSession`: там же, где правило
+/// её открытия и закрытия.
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 struct Meta {
@@ -186,6 +152,8 @@ struct AppState {
     meta: Mutex<Meta>,
     /// id игры → причина, по которой время идёт или не идёт.
     notes: Mutex<HashMap<String, String>>,
+    /// Последние причины отказа: переживают перезапуск.
+    journal: Mutex<Vec<journal::Entry>>,
     tampered: Mutex<Vec<String>>,
     clock_rollback: Mutex<bool>,
     /// Пункт трея «Пауза», чтобы синхронизировать галочку с настройками.
@@ -896,6 +864,12 @@ struct SessionView {
 }
 
 #[tauri::command]
+fn get_journal(state: State<AppState>, id: Option<String>) -> Vec<journal::Entry> {
+    let log = state.journal.lock().unwrap();
+    journal::newest_first(&log, id.as_deref())
+}
+
+#[tauri::command]
 fn get_sessions(state: State<AppState>, id: String) -> Result<Vec<SessionView>, String> {
     let mut out: Vec<SessionView> = {
         let games = state.games.lock().unwrap();
@@ -1287,11 +1261,18 @@ fn spawn_tracker(app: AppHandle) {
 
             // матч по полному пути exe (нормализованному): одинаковые имена файлов
             // у разных игр больше не путают счётчик
-            let wanted: Vec<(String, String, Option<String>)> = {
+            let wanted: Vec<(String, String, String, Option<String>)> = {
                 let games = state.games.lock().unwrap();
                 games
                     .iter()
-                    .map(|g| (g.id.clone(), norm_path(&g.exe_path), g.exe_hash.clone()))
+                    .map(|g| {
+                        (
+                            g.id.clone(),
+                            g.name.clone(),
+                            norm_path(&g.exe_path),
+                            g.exe_hash.clone(),
+                        )
+                    })
                     .collect()
             };
             if wanted.is_empty() {
@@ -1319,15 +1300,12 @@ fn spawn_tracker(app: AppHandle) {
 
             let launched = state.launched.lock().unwrap().clone();
             let ts = now_ts();
-            let mut changed = false;
-            let mut any_playing = false;
-            let mut closed: Vec<ActiveSession> = Vec::new();
 
             // Окна проверяем ДО захвата active: перебор окон не должен
             // блокировать get_summary.
             let mut states: Vec<(String, Option<String>, crate::tracking::Verdict)> =
                 Vec::with_capacity(wanted.len());
-            for (id, exe, stored_hash) in &wanted {
+            for (id, _name, exe, stored_hash) in &wanted {
                 let pids = procs.get(exe);
                 let running = pids.is_some_and(|p| !p.is_empty());
                 let from_launcher = match (launched.get(id).copied(), pids) {
@@ -1378,33 +1356,47 @@ fn spawn_tracker(app: AppHandle) {
                 states.push((id.clone(), note, verdict));
             }
 
-            {
+            // Открытие и закрытие сессий — в чистой функции с тестами.
+            let (changed, closed, any_playing) = {
                 let mut active = state.active.lock().unwrap();
-                for (id, _, verdict) in &states {
+                let verdict_pairs: Vec<(String, tracking::Verdict)> =
+                    states.iter().map(|(id, _, v)| (id.clone(), *v)).collect();
+                let (changed, closed) = tracking::reconcile(&mut active, &verdict_pairs, ts);
+                let any_playing = verdict_pairs.iter().any(|(_, v)| v.is_count());
+                (changed, closed, any_playing)
+            };
+
+            // Журнал: одна запись на смену причины отказа, чтобы после закрытия
+            // игры было видно, почему время не шло.
+            {
+                let names: HashMap<&String, &String> =
+                    wanted.iter().map(|(id, name, _, _)| (id, name)).collect();
+                let mut log = state.journal.lock().unwrap();
+                let mut dirty = false;
+                for (id, note, verdict) in &states {
                     if verdict.is_count() {
-                        any_playing = true;
-                        if let std::collections::hash_map::Entry::Vacant(e) =
-                            active.entry(id.clone())
-                        {
-                            e.insert(ActiveSession::new(id, ts));
-                            changed = true;
-                        }
-                    } else if let Some(a) = active.remove(id) {
-                        changed = true;
-                        closed.push(a);
+                        continue;
                     }
+                    let Some(note) = note else { continue };
+                    let name = names
+                        .get(id)
+                        .map(|n| (*n).clone())
+                        .unwrap_or_else(|| id.clone());
+                    dirty |= journal::record(
+                        &mut log,
+                        journal::Entry {
+                            at: ts,
+                            game_id: id.clone(),
+                            name,
+                            note: note.clone(),
+                        },
+                    );
                 }
-                // игра удалена из библиотеки, пока процесс был жив
-                let known: HashSet<&String> = wanted.iter().map(|(id, _, _)| id).collect();
-                let stale: Vec<String> = active
-                    .keys()
-                    .filter(|k| !known.contains(k))
-                    .cloned()
-                    .collect();
-                for k in stale {
-                    if let Some(a) = active.remove(&k) {
-                        changed = true;
-                        closed.push(a);
+                if dirty {
+                    let snapshot = log.clone();
+                    drop(log);
+                    if let Err(e) = journal::save(&path_of(&state, "journal.json"), &snapshot) {
+                        eprintln!("nyx: журнал не сохранён: {}", e);
                     }
                 }
             }
@@ -1631,6 +1623,13 @@ fn random_install_id() -> String {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Один экземпляр на сеанс пользователя: два лаунчера писали бы одни и те же
+    // файлы и затирали сессии друг друга. Второй запуск показывает первый.
+    if !winutil::acquire_single_instance("Local\\nyxlauncher.corp.ventaxis") {
+        winutil::focus_existing_window("NyxLauncher");
+        return;
+    }
+
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
@@ -1646,6 +1645,7 @@ pub fn run() {
             get_icons,
             open_data_dir,
             get_sessions,
+            get_journal,
             add_manual_session,
             delete_session,
             reset_stats,
@@ -1752,6 +1752,7 @@ pub fn run() {
                 launched: Mutex::new(HashMap::new()),
                 meta: Mutex::new(meta.clone()),
                 notes: Mutex::new(HashMap::new()),
+                journal: Mutex::new(journal::load(&data_dir.join("journal.json"))),
                 tampered: Mutex::new(tampered.clone()),
                 clock_rollback: Mutex::new(clock_rollback),
                 tray_pause: Mutex::new(None),

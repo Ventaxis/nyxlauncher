@@ -114,6 +114,15 @@ export const hasTauri = Boolean(TAU && TAU.core && typeof TAU.core.invoke === 'f
  * @property {boolean} active
  */
 
+/**
+ * Запись журнала учёта: почему время не шло.
+ * @typedef {Object} JournalEntry
+ * @property {number} at Unix-секунды
+ * @property {string} game_id
+ * @property {string} name
+ * @property {string} note
+ */
+
 function core() {
   return window.__TAURI__.core;
 }
@@ -189,6 +198,13 @@ export async function getIcons() {
 export async function getSessions(id) {
   if (hasTauri) return core().invoke('get_sessions', { id });
   return demoSessionsFor(id).map((s) => ({ ...s }));
+}
+
+/** Журнал отказов учёта: все записи или только по одной игре. Новые первыми.
+ * @param {string|null} [id] @returns {Promise<JournalEntry[]>} */
+export async function getJournal(id = null) {
+  if (hasTauri) return core().invoke('get_journal', { id });
+  return demoJournal.filter((e) => !id || e.game_id === id).map((e) => ({ ...e }));
 }
 
 /** @param {{id: string, start: string, minutes: number}} p @returns {Promise<Session>} */
@@ -584,6 +600,29 @@ function demoSaveSettings(next) {
   emitDemo();
   return demoSettingsView();
 }
+
+// ── демо-журнал учёта ─────────────────────────────────────────────────────
+
+const demoJournal = [
+  {
+    at: Math.floor(new Date(isoAt(1, 21, 4)).getTime() / 1000),
+    game_id: 'g2',
+    name: 'Тихая станция',
+    note: 'файл игры изменился после добавления — нажмите «Обновить exe»',
+  },
+  {
+    at: Math.floor(new Date(isoAt(2, 22, 47)).getTime() / 1000),
+    game_id: 'g5',
+    name: 'Static Bloom',
+    note: 'у игры нет контрольной суммы — нажмите «Обновить exe»',
+  },
+  {
+    at: Math.floor(new Date(isoAt(6, 20, 12)).getTime() / 1000),
+    game_id: 'g4',
+    name: 'Paper Kingdoms',
+    note: 'у процесса нет видимого окна',
+  },
+];
 
 // ── демо-история сессий ────────────────────────────────────────────────────
 

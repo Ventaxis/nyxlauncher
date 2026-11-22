@@ -4,6 +4,7 @@ import Achievements from './Achievements.jsx';
 import SessionHistory from './SessionHistory.jsx';
 import {
   fmtClock,
+  fmtDateTime,
   fmtDuration,
   fmtHours,
   fmtLastPlayed,
@@ -44,6 +45,7 @@ export default function Detail({
   stats,
   achievements,
   sessions,
+  journal,
   icon,
   settings,
   busy,
@@ -291,6 +293,36 @@ export default function Detail({
         onReset={onResetStats}
         busy={busy}
       />
+
+      {journal && (
+        <section className="sec">
+          <div className="sec-head">
+            <h2 className="sec-title">Журнал учёта</h2>
+            <span className="sec-count">почему время не шло</span>
+            <span className="sec-flex" />
+            <span className="sec-count mono">{journal.length}</span>
+          </div>
+          {journal.length === 0 ? (
+            <p className="journal-empty">
+              Отказов не было: время засчитывалось без помех.
+            </p>
+          ) : (
+            <ul className="journal">
+              {journal.slice(0, 6).map((e) => (
+                <li className="journal-row" key={`${e.game_id}-${e.at}-${e.note}`}>
+                  <span className="journal-when mono">{fmtDateTime(e.at)}</span>
+                  <span className="journal-note">{e.note}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+          {journal.length > 6 && (
+            <p className="journal-more">
+              Показаны последние 6 из {journal.length}. Полный журнал — в файле journal.json.
+            </p>
+          )}
+        </section>
+      )}
 
       {achievements && (
         <section className="sec">

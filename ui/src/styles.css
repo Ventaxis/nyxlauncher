@@ -1864,6 +1864,52 @@ button {
   color: var(--text-3);
 }
 
+/* --- журнал учёта --------------------------------------------------------- */
+
+.journal {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  overflow: hidden;
+  border: 1px solid var(--hairline);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.journal-row {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--hairline);
+  font-size: 12px;
+}
+
+.journal-row:first-child {
+  border-top: none;
+}
+
+.journal-when {
+  flex: none;
+  color: var(--text-2);
+  white-space: nowrap;
+}
+
+.journal-note {
+  color: var(--text-2);
+}
+
+.journal-empty,
+.journal-more {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.journal-more {
+  margin-top: 10px;
+}
+
 /* --- опасные действия ------------------------------------------------------ */
 
 .danger-zone {

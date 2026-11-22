@@ -6,6 +6,7 @@ import {
   exportData,
   getGameStats,
   getIcons,
+  getJournal,
   getSessions,
   getSettings,
   getSummary,
@@ -45,6 +46,7 @@ export default function App() {
   const [summaryAt, setSummaryAt] = useState(() => Date.now());
   const [stats, setStats] = useState(null);
   const [sessions, setSessions] = useState(null);
+  const [journal, setJournal] = useState(null);
   const [icons, setIcons] = useState({});
   const [settingsView, setSettingsView] = useState(null);
   const [view, setView] = useState('shelf'); // 'shelf' | 'detail' | 'settings'
@@ -162,9 +164,14 @@ export default function App() {
 
   const loadDetail = useCallback(async (id) => {
     try {
-      const [st, list] = await Promise.all([getGameStats(id), getSessions(id)]);
+      const [st, list, log] = await Promise.all([
+        getGameStats(id),
+        getSessions(id),
+        getJournal(id),
+      ]);
       setStats(st);
       setSessions(list);
+      setJournal(log);
     } catch (e) {
       showStatus(errText(e), true);
     }
@@ -178,11 +185,12 @@ export default function App() {
       return undefined;
     }
     let alive = true;
-    Promise.all([getGameStats(selectedId), getSessions(selectedId)])
-      .then(([st, list]) => {
+    Promise.all([getGameStats(selectedId), getSessions(selectedId), getJournal(selectedId)])
+      .then(([st, list, log]) => {
         if (alive) {
           setStats(st);
           setSessions(list);
+          setJournal(log);
         }
       })
       .catch((e) => showStatus(errText(e), true));
@@ -206,6 +214,7 @@ export default function App() {
     setSelectedId(id);
     setStats(null);
     setSessions(null);
+    setJournal(null);
     setQuery('');
     setView('detail');
   }, []);
@@ -522,6 +531,7 @@ export default function App() {
             stats={stats}
             achievements={summary ? summary.achievements : null}
             sessions={sessions}
+            journal={journal}
             icon={showIcons ? icons[selected.id] : null}
             settings={settings}
             busy={busy}

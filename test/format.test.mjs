@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 
 import {
   fmtClock,
+  fmtDateTime,
   fmtDuration,
   fmtHours,
   fmtHoursBig,
@@ -47,4 +48,13 @@ test('fmtHoursBig ниже часа называет секунды и мину�
 test('fmtTimer — живой таймер сессии', () => {
   assert.equal(fmtTimer(65), '1:05');
   assert.equal(fmtTimer(3661), '1:01:01');
+});
+
+test('fmtDateTime переводит Unix-секунды в дату со временем', () => {
+  const ts = Math.floor(new Date(2026, 10, 18, 19, 42).getTime() / 1000);
+  const out = fmtDateTime(ts);
+  assert.match(out, /18 нояб/);
+  assert.match(out, /19:42/);
+  // Битая метка не должна давать «Invalid Date» в журнале.
+  assert.equal(fmtDateTime(Number.NaN), '—');
 });

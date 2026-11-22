@@ -378,6 +378,72 @@ pub fn extract_icon_png(_exe: &str) -> Option<Vec<u8>> {
     None
 }
 
+/// Захватывает именованный мьютекс. false — экземпляр уже запущен.
+///
+/// Дескриптор намеренно живёт до конца процесса: если его закрыть, имя
+/// освободится и следующий запуск снова станет «первым».
+#[cfg(windows)]
+pub fn acquire_single_instance(name: &str) -> bool {
+    use windows::core::PCWSTR;
+    use windows::Win32::Foundation::{GetLastError, ERROR_ALREADY_EXISTS};
+    use windows::Win32::System::Threading::CreateMutexW;
+
+    let wide: Vec<u16> = name.encode_utf16().chain(std::iter::once(0)).collect();
+    // SAFETY: строка живёт до конца вызова, дескриптор не закрываем осознанно.
+    let handle = unsafe { CreateMutexW(None, true, PCWSTR(wide.as_ptr())) };
+    match handle {
+        // ERROR_ALREADY_EXISTS значит, что имя уже занято другим процессом:
+        // мьютекс создан, но мы не первые.
+        Ok(_) => {
+            let err = unsafe { GetLastError() };
+            err != ERROR_ALREADY_EXISTS
+        }
+        // Мьютекс не создался (нехватка ресурсов) — не мешаем запуску.
+        Err(_) => true,
+    }
+}
+
+#[cfg(not(windows))]
+pub fn acquire_single_instance(_name: &str) -> bool {
+    true
+}
+
+/// Показывает окно уже запущенного экземпляра по заголовку.
+#[cfg(windows)]
+pub fn focus_existing_window(title: &str) -> bool {
+    use windows::core::PCWSTR;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        FindWindowW, IsIconic, SetForegroundWindow, ShowWindow, SW_RESTORE, SW_SHOW,
+    };
+
+    let wide: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();
+    // SAFETY: оба указателя — валидные строки с завершающим нулём.
+    let hwnd = match unsafe { FindWindowW(PCWSTR::null(), PCWSTR(wide.as_ptr())) } {
+        Ok(h) => h,
+        // Окно не найдено — второй экземпляр просто выйдет.
+        Err(_) => return false,
+    };
+    if hwnd.0.is_null() {
+        return false;
+    }
+    // SAFETY: дескриптор получен из FindWindowW и принадлежит другому процессу;
+    // ShowWindow/SetForegroundWindow допустимы для чужого окна.
+    unsafe {
+        if IsIconic(hwnd).as_bool() {
+            let _ = ShowWindow(hwnd, SW_RESTORE);
+        } else {
+            let _ = ShowWindow(hwnd, SW_SHOW);
+        }
+        let _ = SetForegroundWindow(hwnd);
+    }
+    true
+}
+
+#[cfg(not(windows))]
+pub fn focus_existing_window(_title: &str) -> bool {
+    false
+}
+
 /// Открыть папку данных в проводнике.
 pub fn open_dir(dir: &Path) -> Result<(), String> {
     #[cfg(windows)]
